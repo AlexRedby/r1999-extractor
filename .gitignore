@@ -1,0 +1,14 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Never commit extracted proprietary game resources or generated packs.
+data/*.jsonl
+data/local/
+output/
