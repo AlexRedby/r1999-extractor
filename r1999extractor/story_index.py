@@ -2,18 +2,43 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
-from dataclasses import asdict, dataclass
+from collections import Counter, defaultdict
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from r1999extractor.atomic_io import atomic_output_path
+from r1999extractor.reverse1999_aliases import canonical_voice_name
+from r1999extractor.reverse1999_config import (
+    Reverse1999ConfigError,
+    find_game_config_directory,
+    load_config_directory,
+)
+from r1999extractor.reverse1999_index import (
+    Reverse1999IndexError,
+    build_bank_index,
+)
+from r1999extractor.reverse1999_index import (
+    default_output as default_bank_index,
+)
+from r1999extractor.reverse1999_voice_import import find_game_audio_directory
 from r1999extractor.settings import get_local_data_directory
+from r1999extractor.story_audio import (
+    StoryAudioResolutionError,
+    StoryAudioResolver,
+    build_audio_registry,
+)
 
 story_asset_name = "configs/story"
 story_bundle_filename = f"{hashlib.md5(story_asset_name.encode()).hexdigest()}.dat"
 story_index_version = 1
 default_output = get_local_data_directory() / "reverse1999" / "story-index.jsonl"
+rich_text_pattern = re.compile(r"<[^>]*>")
+latin_pattern = re.compile(r"[A-Za-z]")
+cjk_pattern = re.compile(r"[\u3400-\u9fff]")
+ascii_word_pattern = re.compile(r"[A-Za-z]{2,}")
 
 
 class Reverse1999StoryError(RuntimeError):
@@ -31,8 +56,21 @@ class StoryLine:
     source: str
     portrait: str | None
     source_voice_id: str | None
+    source_voice_spec: str | None
     display_seconds: float | None
     kind: str
+    voice_character: str
+    text_sha256: str
+    previous_text: str | None = None
+    next_text: str | None = None
+    speakable: bool = True
+    filter_reason: str | None = None
+    audio_status: str = "unchecked"
+    audio_reason: str = "not_resolved"
+    source_event: str | None = None
+    source_bank: str | None = None
+    source_media_ids: tuple[int, ...] = ()
+    available_media_ids: tuple[int, ...] = ()
 
 
 def _localized(value, language_index):
@@ -42,7 +80,25 @@ def _localized(value, language_index):
     return localized.strip() if isinstance(localized, str) else ""
 
 
-def parse_story_document(document, source, *, language_index=2):
+def clean_story_text(value):
+    value = rich_text_pattern.sub("", str(value))
+    return " ".join(value.split())
+
+
+def classify_speakable_english(text, chapter):
+    if not latin_pattern.search(text):
+        return False, "no_latin_text"
+    try:
+        if int(chapter) < 1000:
+            return False, "test_asset"
+    except ValueError:
+        pass
+    if cjk_pattern.search(text) and len(ascii_word_pattern.findall(text)) < 3:
+        return False, "mixed_language_placeholder"
+    return True, None
+
+
+def parse_story_document(document, source, *, language_index=2, include_non_speakable=False):
     if not isinstance(document, list) or len(document) < 3 or not isinstance(document[2], list):
         raise Reverse1999StoryError(f"Story asset {source} has an unsupported structure")
     chapter = source.removeprefix("json_story_step_")
@@ -53,8 +109,12 @@ def parse_story_document(document, source, *, language_index=2):
         payload = step[2]
         if len(payload) <= 15:
             continue
-        text = _localized(payload[15], language_index)
-        if not text:
+        raw_text = _localized(payload[15], language_index)
+        if not raw_text:
+            continue
+        text = clean_story_text(raw_text)
+        speakable, filter_reason = classify_speakable_english(text, chapter)
+        if not speakable and not include_non_speakable:
             continue
         speaker = _localized(payload[11], language_index) or "Narrator"
         try:
@@ -79,8 +139,13 @@ def parse_story_document(document, source, *, language_index=2):
                 source=source,
                 portrait=portrait or None,
                 source_voice_id=source_voice_id or None,
+                source_voice_spec=source_voice_id or None,
                 display_seconds=display_seconds,
                 kind="narration" if speaker == "Narrator" else "dialogue",
+                voice_character=canonical_voice_name(speaker) or speaker,
+                text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                speakable=speakable,
+                filter_reason=filter_reason,
             )
         )
     return lines
@@ -130,7 +195,7 @@ def _load_unity_environment(path):
         raise Reverse1999StoryError(f"Unable to load story bundle {path}: {error}") from error
 
 
-def extract_story_lines(bundle, *, language_index=2, progress=None):
+def extract_story_lines(bundle, *, language_index=2, include_non_speakable=False, progress=None):
     progress = progress or (lambda _current, _total, _source: None)
     environment = _load_unity_environment(bundle)
     assets = [obj for obj in environment.objects if obj.type.name == "TextAsset"]
@@ -146,10 +211,97 @@ def extract_story_lines(bundle, *, language_index=2, progress=None):
             document = json.loads(asset.m_Script.lstrip("\ufeff"))
         except (TypeError, json.JSONDecodeError) as error:
             raise Reverse1999StoryError(f"Invalid JSON in {asset.m_Name}: {error}") from error
-        lines.extend(parse_story_document(document, asset.m_Name, language_index=language_index))
+        lines.extend(
+            parse_story_document(
+                document,
+                asset.m_Name,
+                language_index=language_index,
+                include_non_speakable=include_non_speakable,
+            )
+        )
         progress(current, len(story_assets), asset.m_Name)
     lines.sort(key=lambda line: (line.chapter, line.sequence, line.line_id))
-    return lines
+    return add_story_context(lines)
+
+
+def add_story_context(lines):
+    by_chapter = defaultdict(list)
+    for line in lines:
+        if line.speakable:
+            by_chapter[line.chapter].append(line)
+    context = {}
+    for chapter_lines in by_chapter.values():
+        chapter_lines.sort(key=lambda line: (line.sequence, line.line_id))
+        for index, line in enumerate(chapter_lines):
+            context[line.line_id] = (
+                chapter_lines[index - 1].text if index else None,
+                chapter_lines[index + 1].text if index + 1 < len(chapter_lines) else None,
+            )
+    return [
+        replace(
+            line,
+            previous_text=context.get(line.line_id, (None, None))[0],
+            next_text=context.get(line.line_id, (None, None))[1],
+        )
+        for line in lines
+    ]
+
+
+def resolve_story_audio(lines, resolver):
+    resolved = []
+    for line in lines:
+        resolution = resolver.resolve(line.source_voice_spec)
+        resolved.append(
+            replace(
+                line,
+                audio_status=resolution.status,
+                audio_reason=resolution.reason,
+                source_voice_id=resolution.audio_id,
+                source_event=resolution.event,
+                source_bank=resolution.bank,
+                source_media_ids=resolution.media_ids,
+                available_media_ids=resolution.available_media_ids,
+            )
+        )
+    return resolved
+
+
+def build_story_audio_resolver(
+    *,
+    config_directory=None,
+    bank_index_path=default_bank_index,
+    game_audio_directory=None,
+    progress=None,
+):
+    config_directory = config_directory or find_game_config_directory()
+    if config_directory is None:
+        raise Reverse1999StoryError(
+            "Unable to find installed game configs; pass --config-directory"
+        )
+    _language, tables = load_config_directory(config_directory)
+    try:
+        registry = build_audio_registry(tables)
+    except StoryAudioResolutionError as error:
+        raise Reverse1999StoryError(str(error)) from error
+    bank_index_path = Path(bank_index_path).expanduser().resolve()
+    try:
+        resolver = StoryAudioResolver.from_file(registry, bank_index_path)
+    except StoryAudioResolutionError as error:
+        audio_root = game_audio_directory or find_game_audio_directory()
+        if audio_root is None:
+            raise Reverse1999StoryError(
+                "Unable to find installed English audio; pass --game-audio-directory"
+            ) from error
+        bank_index, _output = build_bank_index(
+            audio_root,
+            output=bank_index_path,
+            progress=progress,
+        )
+        try:
+            resolver = StoryAudioResolver(registry, bank_index)
+        except StoryAudioResolutionError as resolver_error:
+            raise Reverse1999StoryError(str(resolver_error)) from resolver_error
+    return resolver
 
 
 def write_story_index(lines, output=default_output, *, bundle=None):
@@ -163,6 +315,8 @@ def write_story_index(lines, output=default_output, *, bundle=None):
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_bundle": str(Path(bundle).resolve()) if bundle else None,
         "line_count": len(lines),
+        "speakable_count": sum(line.speakable for line in lines),
+        "audio_status_counts": dict(sorted(Counter(line.audio_status for line in lines).items())),
     }
     with atomic_output_path(output) as temporary:
         with temporary.open("w", encoding="utf-8", newline="\n") as stream:
@@ -183,6 +337,19 @@ def create_parser():
         "--bundle", type=Path, help="Story Unity bundle; overrides automatic discovery"
     )
     parser.add_argument("--output", type=Path, default=default_output)
+    parser.add_argument("--config-directory", type=Path)
+    parser.add_argument("--game-audio-directory", type=Path)
+    parser.add_argument("--bank-index", type=Path, default=default_bank_index)
+    parser.add_argument(
+        "--include-non-speakable",
+        action="store_true",
+        help="Include localized test, placeholder, and non-English records.",
+    )
+    parser.add_argument(
+        "--skip-audio-resolution",
+        action="store_true",
+        help="Write unchecked lines without scanning config and local Wwise media.",
+    )
     return parser
 
 
@@ -198,19 +365,42 @@ def main(arguments=None):
     try:
         lines = extract_story_lines(
             bundle,
+            include_non_speakable=options.include_non_speakable,
             progress=lambda current, total, source: (
                 print(f"Parsed {current}/{total}: {source}")
                 if current == total or current % 250 == 0
                 else None
             ),
         )
+        if not options.skip_audio_resolution:
+            resolver = build_story_audio_resolver(
+                config_directory=options.config_directory,
+                bank_index_path=options.bank_index,
+                game_audio_directory=options.game_audio_directory,
+                progress=lambda current, total, bank, reused: (
+                    print(f"{'Reused' if reused else 'Indexed'} {current}/{total}: {bank.name}")
+                    if current == total or current % 250 == 0
+                    else None
+                ),
+            )
+            lines = resolve_story_audio(lines, resolver)
         output = write_story_index(lines, options.output, bundle=bundle)
-    except (OSError, Reverse1999StoryError) as error:
+    except (
+        OSError,
+        Reverse1999ConfigError,
+        Reverse1999IndexError,
+        Reverse1999StoryError,
+        StoryAudioResolutionError,
+    ) as error:
         print(error, file=sys.stderr)
         return 1
     dialogue = sum(line.kind == "dialogue" for line in lines)
+    statuses = Counter(line.audio_status for line in lines)
     print(
-        f"Wrote {len(lines)} lines ({dialogue} dialogue, {len(lines) - dialogue} narration) to {output}"
+        f"Wrote {len(lines)} lines ({dialogue} dialogue, "
+        f"{len(lines) - dialogue} narration; "
+        f"{', '.join(f'{key}={value}' for key, value in sorted(statuses.items()))}) "
+        f"to {output}"
     )
     return 0
 

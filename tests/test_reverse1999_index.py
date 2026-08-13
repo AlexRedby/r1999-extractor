@@ -76,6 +76,7 @@ class Reverse1999BankIndexTest(unittest.TestCase):
         self.assertEqual(index["categories"], {"story-npc": 1})
         self.assertEqual(index["banks"][0]["chapters"], [9])
         self.assertEqual(index["banks"][0]["media_count"], 2)
+        self.assertEqual(index["banks"][0]["embedded_media_ids"], [10, 20])
         self.assertEqual(saved["banks"][0]["hirc_object_count"], 4)
         self.assertEqual(saved["banks"][0]["event_count"], 1)
         self.assertEqual(

@@ -14,7 +14,7 @@ from r1999extractor.reverse1999_voice_import import (
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.wwise import WwiseBankError, inspect_bank
 
-index_version = 3
+index_version = 4
 default_output = get_local_data_directory() / "reverse1999" / "english-bank-index.json"
 npc_id_pattern = re.compile(r"npc[_-]?(\d{4,})", re.IGNORECASE)
 chapter_pattern = re.compile(r"chapter[_-]?(\d+)", re.IGNORECASE)
@@ -92,9 +92,7 @@ def inspect_bank_entry(bank, root, *, inspector=inspect_bank):
         "category": category,
         "tags": tags,
         "npc_ids": sorted(set(npc_id_pattern.findall(bank.stem))),
-        "chapters": sorted(
-            {int(value) for value in chapter_pattern.findall(bank.stem)}
-        ),
+        "chapters": sorted({int(value) for value in chapter_pattern.findall(bank.stem)}),
     }
     try:
         summary = inspector(bank)
@@ -107,6 +105,7 @@ def inspect_bank_entry(bank, root, *, inspector=inspect_bank):
             "bank_version": summary.bank_version,
             "sections": list(summary.sections),
             "media_count": summary.media_count,
+            "embedded_media_ids": list(summary.media_ids),
             "embedded_media_bytes": summary.embedded_media_bytes,
             "hirc_object_count": summary.hirc_object_count,
             "event_count": summary.event_count,
@@ -137,9 +136,9 @@ def load_reusable_entries(path, root):
         previous = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
-    if previous.get("version") != index_version or previous.get(
-        "game_audio_directory"
-    ) != str(root):
+    if previous.get("version") != index_version or previous.get("game_audio_directory") != str(
+        root
+    ):
         return {}
     return {
         entry["path"]: entry
@@ -160,11 +159,7 @@ def build_bank_index(
     if not root.is_dir():
         raise Reverse1999IndexError(f"Game audio directory does not exist: {root}")
     banks = sorted(
-        (
-            path
-            for path in root.rglob("*")
-            if path.is_file() and path.suffix.casefold() == ".bnk"
-        ),
+        (path for path in root.rglob("*") if path.is_file() and path.suffix.casefold() == ".bnk"),
         key=lambda path: path.relative_to(root).as_posix().casefold(),
     )
     if not banks:

@@ -36,6 +36,23 @@ Or provide the installed resource directory explicitly:
 r1999-story-index --resource-root /path/to/ResLib/iOS --output ./output/story-index.jsonl
 ```
 
+By default this command keeps English speakable records, strips Unity rich-text
+markup, normalizes known speaker aliases, adds previous/next-line context, and
+resolves every original voice cue against decrypted audio configuration and the
+installed Wwise media. It rebuilds an outdated bank index automatically.
+
+Every output line has one explicit audio status:
+
+- `installed`: the configured event resolves to embedded or streamed local media;
+- `no_audio`: the story has a blank or zero voice cue;
+- `configured_unavailable`: a valid route exists but its bank, event, or media is
+  not installed;
+- `unresolved`: the story references an ID absent from the installed config.
+
+Use `--include-non-speakable` for a preservation-oriented export containing
+localized test, placeholder, and non-English records. Use
+`--skip-audio-resolution` only when a text-only index is sufficient.
+
 Configure VNTTS with the generated story index and the voice manifest produced by the import/review tools. Extracted artifacts are deliberately ignored by Git.
 
 If you used the extraction tools while they were part of VNTTS, copy the local
