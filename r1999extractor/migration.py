@@ -1,10 +1,10 @@
 import argparse
 import shutil
-import sys
 from pathlib import Path
 
 from platformdirs import user_data_path
 
+from r1999extractor.cli import cli_error
 from r1999extractor.settings import get_local_data_directory
 
 
@@ -62,8 +62,7 @@ def main(arguments=None):
     try:
         results = migrate_legacy_data(options.source, options.destination, dry_run=options.dry_run)
     except MigrationError as error:
-        print(error, file=sys.stderr)
-        return 1
+        return cli_error(error)
     for status, old, new in results:
         print(f"{status}: {old} -> {new}")
     return 0

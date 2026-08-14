@@ -1,6 +1,5 @@
 import argparse
 import hashlib
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +13,7 @@ from vntts_artifacts.voice_manifest import (
     write_voice_manifest,
 )
 
+from r1999extractor.cli import cli_error
 from r1999extractor.reverse1999_aliases import aliases_for_character
 from r1999extractor.reverse1999_catalog import (
     Reverse1999CatalogError,
@@ -296,8 +296,7 @@ def main(arguments=None):
             bank,
         )
     except (GameVoiceImportError, WwiseBankError, AudioConversionError) as error:
-        print(error, file=sys.stderr)
-        return 1
+        return cli_error(error)
 
     print(
         f"Imported {len(references)} clean references for {arguments.character} "

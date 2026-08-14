@@ -1,7 +1,7 @@
 import argparse
-import sys
 from pathlib import Path
 
+from r1999extractor.cli import cli_error
 from r1999extractor.wwise import (
     AudioConversionError,
     WwiseBankError,
@@ -58,8 +58,7 @@ def extract_main(arguments=None):
                 overwrite=arguments.overwrite,
             )
     except (WwiseBankError, AudioConversionError) as error:
-        print(error, file=sys.stderr)
-        return 1
+        return cli_error(error)
 
     noun = "WAV files" if arguments.convert else "WEM files"
     print(f"Created {len(outputs)} {noun} in {arguments.output_directory.resolve()}")
@@ -76,8 +75,7 @@ def convert_main(arguments=None):
             overwrite=arguments.overwrite,
         )
     except AudioConversionError as error:
-        print(error, file=sys.stderr)
-        return 1
+        return cli_error(error)
 
     print(f"Created {output}")
     return 0

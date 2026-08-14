@@ -1,9 +1,9 @@
 import argparse
-import sys
 from pathlib import Path
 
 from vntts_artifacts.atomic_io import atomic_write_json
 
+from r1999extractor.cli import cli_error
 from r1999extractor.generation_queue import (
     build_generation_queue,
     load_story_records,
@@ -134,8 +134,7 @@ def main(arguments=None):
             progress=lambda message: print(message),
         )
     except (BootstrapError, OSError, ValueError) as error:
-        print(error, file=sys.stderr)
-        return 1
+        return cli_error(error)
     print(
         f"Built {result['story_line_count']} story lines and "
         f"{result['generation_item_count']} generation items"

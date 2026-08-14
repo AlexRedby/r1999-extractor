@@ -1,6 +1,5 @@
 import argparse
 import json
-import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +9,7 @@ from r1999extractor.bulk_generation import (
     load_generation_queue,
     run_bulk_generation,
 )
+from r1999extractor.cli import cli_error
 from r1999extractor.generation_queue import default_output as default_queue
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.versioned_json import VersionedJSONCodec
@@ -161,8 +161,7 @@ def main(arguments=None):
             seed=options.seed,
         )
     except (ModelBenchmarkError, OSError) as error:
-        print(error, file=sys.stderr)
-        return 1
+        return cli_error(error)
     print(
         f"Benchmarked {len(report['models'])} model(s) on {report['sample_count']} shared lines; "
         f"complete manual scores in {options.output / 'benchmark-report.json'}"

@@ -1,7 +1,6 @@
 import argparse
 import json
 import math
-import sys
 import wave
 from dataclasses import asdict, dataclass, replace
 from itertools import combinations
@@ -11,6 +10,7 @@ import numpy as np
 from vntts_artifacts.atomic_io import atomic_write_json
 from vntts_artifacts.audio import write_pcm16_wav
 
+from r1999extractor.cli import cli_error
 from r1999extractor.settings import get_local_data_directory
 
 default_review_path = get_local_data_directory() / "reverse1999" / "clip-reviews.json"
@@ -343,8 +343,7 @@ def main(arguments=None):
         metrics = [analyze_voice_reference(path) for path in arguments.wav]
         output = write_quality_report(metrics, arguments.output)
     except VoiceReferenceQualityError as error:
-        print(error, file=sys.stderr)
-        return 1
+        return cli_error(error)
     print(f"Scored {len(metrics)} clip(s) into {output}")
     return 0
 

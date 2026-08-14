@@ -1,10 +1,10 @@
 import argparse
 import json
-import sys
 from pathlib import Path
 
 from vntts_artifacts.atomic_io import atomic_write_json
 
+from r1999extractor.cli import cli_error
 from r1999extractor.reverse1999_config import find_game_config_directory, load_config_directory
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.structured_story import audit_story_like_tables
@@ -23,8 +23,7 @@ def main(arguments=None):
     options = create_parser().parse_args(arguments)
     config_directory = options.config_directory or find_game_config_directory()
     if config_directory is None:
-        print("Unable to find installed game configs; pass --config-directory", file=sys.stderr)
-        return 1
+        return cli_error("Unable to find installed game configs; pass --config-directory")
     try:
         language, tables = load_config_directory(config_directory)
         report = audit_story_like_tables(language, tables)
@@ -37,8 +36,7 @@ def main(arguments=None):
         )
         atomic_write_json(options.output, report, sort_keys=True)
     except (OSError, json.JSONDecodeError) as error:
-        print(error, file=sys.stderr)
-        return 1
+        return cli_error(error)
     print(
         f"Reviewed {report['reviewed_table_count']} story-like tables; "
         f"{report['handled_table_count']} have explicit extraction schemas"

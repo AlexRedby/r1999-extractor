@@ -4,7 +4,6 @@ import json
 import os
 import shlex
 import subprocess
-import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +18,7 @@ from vntts_artifacts.file_integrity import sha256_file
 from vntts_artifacts.generated_audio import write_generated_audio_manifest
 from vntts_artifacts.text_utils import slugify
 
+from r1999extractor.cli import cli_error, cli_success
 from r1999extractor.generation_queue import default_output as default_queue
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.versioned_json import VersionedJSONCodec, VersionedJSONError
@@ -302,8 +302,7 @@ def main(arguments=None):
     try:
         if options.command == "review":
             review_item(options.state, options.queue_id, options.decision)
-            print(f"Marked {options.queue_id} as {options.decision}")
-            return 0
+            return cli_success(f"Marked {options.queue_id} as {options.decision}")
         provider = CommandProvider(
             options.provider_command,
             provider=options.provider,
@@ -319,8 +318,7 @@ def main(arguments=None):
             seed=options.seed,
         )
     except (BulkGenerationError, OSError, json.JSONDecodeError) as error:
-        print(error, file=sys.stderr)
-        return 1
+        return cli_error(error)
     print(
         f"Generated {result['generated']} item(s), {result['failed']} failed; "
         f"manifest: {result['manifest']}"
