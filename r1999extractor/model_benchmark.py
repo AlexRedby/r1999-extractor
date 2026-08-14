@@ -5,8 +5,6 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from vntts_artifacts.atomic_io import atomic_write_json
-
 from r1999extractor.bulk_generation import (
     CommandProvider,
     load_generation_queue,
@@ -14,9 +12,13 @@ from r1999extractor.bulk_generation import (
 )
 from r1999extractor.generation_queue import default_output as default_queue
 from r1999extractor.settings import get_local_data_directory
+from r1999extractor.versioned_json import VersionedJSONCodec
 
 benchmark_schema = "r1999.voice-model-benchmark"
 benchmark_schema_version = 1
+benchmark_codec = VersionedJSONCodec(
+    benchmark_schema, benchmark_schema_version, "voice model benchmark"
+)
 default_output = get_local_data_directory() / "reverse1999" / "model-benchmark"
 
 
@@ -103,17 +105,15 @@ def benchmark_models(queue_path, output_directory, providers, *, sample_size=24,
                 },
             }
         )
-    report = {
-        "schema": benchmark_schema,
-        "schema_version": benchmark_schema_version,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "source_queue": str(Path(queue_path).expanduser().resolve()),
-        "sample_count": len(sample),
-        "sample_queue": str(sample_queue),
-        "manual_review_required": True,
-        "models": models,
-    }
-    atomic_write_json(output_directory / "benchmark-report.json", report, sort_keys=True)
+    report = benchmark_codec.new(
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        source_queue=str(Path(queue_path).expanduser().resolve()),
+        sample_count=len(sample),
+        sample_queue=str(sample_queue),
+        manual_review_required=True,
+        models=models,
+    )
+    benchmark_codec.write(output_directory / "benchmark-report.json", report, sort_keys=True)
     return report
 
 

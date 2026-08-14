@@ -14,7 +14,7 @@ dependencies = [
     "numpy>=1.24",
     "platformdirs>=4.3,<5",
     "UnityPy>=1.25,<2",
-    "vntts-artifacts",
+    "vntts-artifacts[audio]",
 ]
 
 [project.optional-dependencies]
@@ -51,4 +51,4 @@ line-length = 100
 select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.uv.sources]
-vntts-artifacts = { git = "https://github.com/AlexRedby/vntts-artifacts.git", tag = "v0.2.0" }
+vntts-artifacts = { git = "https://github.com/AlexRedby/vntts-artifacts.git", tag = "v0.3.0" }

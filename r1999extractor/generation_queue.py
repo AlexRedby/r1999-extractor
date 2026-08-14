@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import json
 import sys
 from collections import Counter
@@ -8,6 +7,7 @@ from pathlib import Path
 
 from vntts_artifacts.atomic_io import atomic_output_path
 from vntts_artifacts.file_integrity import sha256_file
+from vntts_artifacts.hashing import text_sha256
 
 from r1999extractor.delivery import annotate_delivery, delivery_annotation_version
 from r1999extractor.settings import get_local_data_directory
@@ -92,19 +92,19 @@ def build_generation_queue(records):
             raise GenerationQueueError(f"Unsupported audio status: {audio_status}")
         line_id = _required_text(record, "line_id")
         text = _required_text(record, "text")
-        text_sha256 = str(record.get("text_sha256") or "").strip()
-        calculated_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        if text_sha256 and text_sha256 != calculated_hash:
+        declared_text_hash = str(record.get("text_sha256") or "").strip()
+        calculated_hash = text_sha256(text)
+        if declared_text_hash and declared_text_hash != calculated_hash:
             raise GenerationQueueError(f"Text hash does not match line {line_id}")
-        text_sha256 = calculated_hash
+        text_hash = calculated_hash
         voice_character = str(
             record.get("voice_character") or record.get("speaker") or "Narrator"
         ).strip()
         item = {
                 "record_type": "generation_item",
-                "queue_id": f"{line_id}:{text_sha256[:16]}",
+                "queue_id": f"{line_id}:{text_hash[:16]}",
                 "line_id": line_id,
-                "text_sha256": text_sha256,
+                "text_sha256": text_hash,
                 "speaker": _required_text(record, "speaker"),
                 "voice_character": voice_character,
                 "text": text,

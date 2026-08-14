@@ -1,6 +1,8 @@
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
+from vntts_artifacts.hashing import text_sha256
+
 from r1999extractor.reverse1999_aliases import canonical_voice_name
 from r1999extractor.reverse1999_config import extract_character_identities, resolve_speaker_name
 from r1999extractor.story_index import (
@@ -212,7 +214,7 @@ def extract_structured_story_lines(
                     display_seconds=None,
                     kind=kind,
                     voice_character=canonical_voice_name(speaker) or speaker,
-                    text_sha256=__import__("hashlib").sha256(text.encode("utf-8")).hexdigest(),
+                    text_sha256=text_sha256(text),
                     speakable=speakable,
                     filter_reason=filter_reason,
                     audio_status="unchecked" if voice_spec else "no_audio",

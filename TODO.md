@@ -3,6 +3,16 @@
 Keep game-specific extraction and generation preparation here. VNTTS should
 only consume versioned, game-agnostic artifacts.
 
+## Consolidation follow-up
+
+- [x] Adopt `vntts-artifacts v0.3.0` for the shared PCM WAV writer/probe, audio
+      format constant, text hash, and character-name normalization.
+- [x] Add a repository-local `VersionedJSONCodec` for extractor-owned JSON state
+      and reports, preserving each domain's schema and error type; do not move
+      game-specific state into `vntts-artifacts`.
+- [ ] Consolidate repeated CLI error-to-stderr and exit-code handling behind a
+      repository-local harness while keeping command-specific parsers explicit.
+
 ## Repository boundary
 
 - [x] Keep decrypted configs, extracted story text/audio, indexes, generation

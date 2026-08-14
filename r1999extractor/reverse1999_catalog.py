@@ -2,15 +2,16 @@ import argparse
 import json
 import re
 import sys
-import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 from vntts_artifacts.atomic_io import atomic_write_json
 from vntts_artifacts.file_integrity import sha256_file
+from vntts_artifacts.voice_manifest import normalize_character_name
 
 from r1999extractor.settings import get_local_data_directory
+from r1999extractor.versioned_json import VersionedJSONCodec, VersionedJSONError
 
 project_root = Path(__file__).resolve().parents[1]
 default_catalog_path = get_local_data_directory() / "reverse1999" / "npc-catalog.json"
@@ -21,18 +22,16 @@ catalog_schema = "r1999.npc-catalog"
 catalog_schema_version = 1
 overlay_schema = "r1999.npc-catalog-overlay"
 overlay_schema_version = 1
+overlay_codec = VersionedJSONCodec(
+    overlay_schema, overlay_schema_version, "NPC catalog overlay"
+)
 
 
 class Reverse1999CatalogError(RuntimeError):
     pass
 
 
-def normalize_name(value):
-    return "".join(
-        character
-        for character in unicodedata.normalize("NFKC", value).casefold()
-        if character.isalnum()
-    )
+normalize_name = normalize_character_name
 
 
 @dataclass(frozen=True)
@@ -231,15 +230,11 @@ def _localized(language, key, fallback=""):
 def _load_overlay(path):
     path = Path(path).expanduser().resolve()
     if not path.is_file():
-        return {"schema": overlay_schema, "schema_version": overlay_schema_version, "npcs": []}
+        return overlay_codec.new(npcs=[])
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise Reverse1999CatalogError(f"Unable to read catalog overlay {path}: {error}") from error
-    if not isinstance(document, dict):
-        raise Reverse1999CatalogError("NPC catalog overlay must be an object")
-    if document.get("schema") != overlay_schema or document.get("schema_version") != 1:
-        raise Reverse1999CatalogError("Unsupported NPC catalog overlay schema")
+        document = overlay_codec.load(path)
+    except VersionedJSONError as error:
+        raise Reverse1999CatalogError(str(error)) from error
     if not isinstance(document.get("npcs"), list):
         raise Reverse1999CatalogError("NPC catalog overlay requires an NPC list")
     return document

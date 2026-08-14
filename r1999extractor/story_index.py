@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from vntts_artifacts.hashing import text_sha256
 from vntts_artifacts.story_index import write_story_index as write_story_index_document
 
 from r1999extractor.reverse1999_aliases import canonical_voice_name
@@ -148,7 +149,7 @@ def parse_story_document(document, source, *, language_index=2, include_non_spea
                 display_seconds=display_seconds,
                 kind="narration" if speaker == "Narrator" else "dialogue",
                 voice_character=canonical_voice_name(speaker) or speaker,
-                text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                text_sha256=text_sha256(text),
                 speakable=speakable,
                 filter_reason=filter_reason,
             )
@@ -298,7 +299,7 @@ def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=Fal
                 display_seconds=None,
                 kind="dialogue" if plot_type == "dialog" else "narration",
                 voice_character=canonical_voice_name(speaker) or speaker,
-                text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                text_sha256=text_sha256(text),
                 speakable=speakable,
                 filter_reason=filter_reason,
                 audio_status="no_audio",

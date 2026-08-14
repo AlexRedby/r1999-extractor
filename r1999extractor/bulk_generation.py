@@ -5,22 +5,29 @@ import os
 import shlex
 import subprocess
 import sys
-import wave
-from array import array
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from vntts_artifacts.atomic_io import atomic_write_json
+from vntts_artifacts.audio import (
+    PCM16_MONO_WAV_FORMAT,
+    Pcm16MonoWavError,
+    read_pcm16_mono_wav,
+)
 from vntts_artifacts.file_integrity import sha256_file
 from vntts_artifacts.generated_audio import write_generated_audio_manifest
 from vntts_artifacts.text_utils import slugify
 
 from r1999extractor.generation_queue import default_output as default_queue
 from r1999extractor.settings import get_local_data_directory
+from r1999extractor.versioned_json import VersionedJSONCodec, VersionedJSONError
 
 generation_state_schema = "r1999.bulk-generation-state"
 generation_state_version = 1
+generation_state_codec = VersionedJSONCodec(
+    generation_state_schema, generation_state_version, "generation state"
+)
 default_output = get_local_data_directory() / "reverse1999" / "generated-audio"
 
 
@@ -40,27 +47,22 @@ class AudioQuality:
 def inspect_generated_wav(path):
     path = Path(path)
     try:
-        with wave.open(str(path), "rb") as source:
-            channels = source.getnchannels()
-            sample_width = source.getsampwidth()
-            sample_rate = source.getframerate()
-            frames = source.getnframes()
-            content = source.readframes(frames)
-    except (OSError, EOFError, wave.Error) as error:
+        _samples, info = read_pcm16_mono_wav(path)
+    except Pcm16MonoWavError as error:
         raise BulkGenerationError(f"Generated output is not a readable WAV: {error}") from error
-    if channels != 1 or sample_width != 2 or sample_rate < 16000:
+    if info.sample_rate < 16000:
         raise BulkGenerationError("Generated WAV must be 16-bit mono at 16 kHz or higher")
-    duration = frames / sample_rate if sample_rate else 0.0
+    duration = info.duration_seconds
     if duration < 0.1 or duration > 180:
         raise BulkGenerationError(f"Generated WAV duration is implausible: {duration:.2f}s")
-    samples = array("h")
-    samples.frombytes(content)
-    peak = max((abs(value) for value in samples), default=0) / 32768
+    peak = info.peak
     if peak < 0.001:
         raise BulkGenerationError("Generated WAV is effectively silent")
     if peak >= 1.0:
         raise BulkGenerationError("Generated WAV is clipped")
-    return AudioQuality(round(duration, 4), sample_rate, channels, frames, round(peak, 6))
+    return AudioQuality(
+        round(duration, 4), info.sample_rate, 1, info.sample_count, round(peak, 6)
+    )
 
 
 class CommandProvider:
@@ -119,18 +121,11 @@ def load_generation_queue(path):
 def _load_state(path, queue_sha256):
     path = Path(path)
     if not path.is_file():
-        return {
-            "schema": generation_state_schema,
-            "schema_version": generation_state_version,
-            "queue_sha256": queue_sha256,
-            "items": {},
-        }
+        return generation_state_codec.new(queue_sha256=queue_sha256, items={})
     try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise BulkGenerationError(f"Unable to read generation state {path}: {error}") from error
-    if state.get("schema") != generation_state_schema or state.get("schema_version") != 1:
-        raise BulkGenerationError("Unsupported generation state")
+        state = generation_state_codec.load(path)
+    except VersionedJSONError as error:
+        raise BulkGenerationError(str(error)) from error
     if state.get("queue_sha256") != queue_sha256:
         raise BulkGenerationError("Generation queue changed; start a new output directory")
     if not isinstance(state.get("items"), dict):
@@ -203,7 +198,7 @@ def run_bulk_generation(
                     "quality": asdict(quality),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
-                atomic_write_json(state_path, state, sort_keys=True)
+                generation_state_codec.write(state_path, state, sort_keys=True)
                 generated += 1
                 break
             except (BulkGenerationError, OSError) as error:
@@ -215,7 +210,7 @@ def run_bulk_generation(
                     "last_error": last_error,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
-                atomic_write_json(state_path, state, sort_keys=True)
+                generation_state_codec.write(state_path, state, sort_keys=True)
         if state["items"][queue_id].get("status") == "failed":
             continue
     publish_generated_manifest(state, manifest_path)
@@ -238,7 +233,7 @@ def publish_generated_manifest(state, path):
                 "line_id": result["line_id"],
                 "text_sha256": result["text_sha256"],
                 "audio": result["path"],
-                "audio_format": "wav-pcm16-mono",
+                "audio_format": PCM16_MONO_WAV_FORMAT,
                 "audio_sha256": result["file_sha256"],
                 "sample_rate": result["quality"]["sample_rate"],
                 "sample_count": result["quality"]["sample_count"],
@@ -267,14 +262,17 @@ def review_item(state_path, queue_id, decision):
     if decision not in {"approved", "rejected"}:
         raise BulkGenerationError("Review decision must be approved or rejected")
     state_path = Path(state_path).expanduser().resolve()
-    state = json.loads(state_path.read_text(encoding="utf-8"))
+    try:
+        state = generation_state_codec.load(state_path)
+    except VersionedJSONError as error:
+        raise BulkGenerationError(str(error)) from error
     item = state.get("items", {}).get(queue_id)
     if item is None or item.get("status") not in {"generated", "approved"}:
         raise BulkGenerationError(f"Generated queue item does not exist: {queue_id}")
     item["review_status"] = decision
     item["status"] = "approved" if decision == "approved" else "generated"
     item["updated_at"] = datetime.now(timezone.utc).isoformat()
-    atomic_write_json(state_path, state, sort_keys=True)
+    generation_state_codec.write(state_path, state, sort_keys=True)
     publish_generated_manifest(state, state_path.parent / "manifest.json")
     return state
 
