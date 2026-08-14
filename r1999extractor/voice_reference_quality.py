@@ -8,8 +8,8 @@ from itertools import combinations
 from pathlib import Path
 
 import numpy as np
+from vntts_artifacts.atomic_io import atomic_write_json
 
-from r1999extractor.atomic_io import atomic_write_json
 from r1999extractor.audio_io import write_pcm16_wav
 from r1999extractor.settings import get_local_data_directory
 

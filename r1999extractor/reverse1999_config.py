@@ -8,8 +8,8 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
+from vntts_artifacts.atomic_io import atomic_write_json
 
-from r1999extractor.atomic_io import atomic_write_json
 from r1999extractor.reverse1999_catalog import Reverse1999NpcCatalog, default_catalog_path
 from r1999extractor.settings import get_local_data_directory
 

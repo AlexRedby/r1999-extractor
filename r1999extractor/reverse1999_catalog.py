@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from r1999extractor.file_integrity import sha256_file
+from vntts_artifacts.file_integrity import sha256_file
 
 project_root = Path(__file__).resolve().parents[1]
 default_catalog_path = project_root / "data" / "reverse1999-npc-catalog.json"

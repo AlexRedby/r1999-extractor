@@ -1,22 +1,26 @@
 import argparse
 import hashlib
-import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from r1999extractor.atomic_io import atomic_write_json
-from r1999extractor.file_integrity import sha256_file
+from vntts_artifacts.file_integrity import sha256_file
+from vntts_artifacts.text_utils import slugify
+from vntts_artifacts.voice_manifest import (
+    VoiceManifestError,
+    load_voice_manifest,
+    upsert_voice_manifest_entry,
+    write_voice_manifest,
+)
+
 from r1999extractor.reverse1999_aliases import aliases_for_character
 from r1999extractor.reverse1999_catalog import (
     Reverse1999CatalogError,
     Reverse1999NpcCatalog,
     default_catalog_path,
-    normalize_name,
 )
 from r1999extractor.settings import get_local_data_directory
-from r1999extractor.text_utils import slugify
 from r1999extractor.voice_reference_quality import trim_and_normalize_voice_reference
 from r1999extractor.wwise import (
     AudioConversionError,
@@ -211,22 +215,13 @@ def decode_references(
 
 def update_manifest(output_directory, character, references, source_bank):
     manifest_path = output_directory / "manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    if not manifest_path.is_file():
         manifest = {"version": 2, "reference_count": len(references), "voices": []}
-    except json.JSONDecodeError as error:
-        raise GameVoiceImportError(f"Invalid voice manifest: {error}") from error
-
-    voices = manifest.get("voices")
-    if not isinstance(voices, list):
-        raise GameVoiceImportError("Voice manifest must contain a voices list")
-    normalized_character = normalize_name(character)
-    voices = [
-        voice
-        for voice in voices
-        if normalize_name(str(voice.get("character", ""))) != normalized_character
-    ]
+    else:
+        try:
+            manifest, _entries = load_voice_manifest(manifest_path)
+        except VoiceManifestError as error:
+            raise GameVoiceImportError(f"Invalid voice manifest: {error}") from error
     reference_paths = [
         reference.path if isinstance(reference, ImportedReference) else Path(reference)
         for reference in references
@@ -266,11 +261,11 @@ def update_manifest(output_directory, character, references, source_bank):
             }
             for reference in imported
         ]
-    voices.append(entry)
-    voices.sort(key=lambda voice: voice["character"].casefold())
-    manifest["version"] = 2
-    manifest["voices"] = voices
-    atomic_write_json(manifest_path, manifest)
+    try:
+        manifest = upsert_voice_manifest_entry(manifest, entry)
+        write_voice_manifest(manifest_path, manifest)
+    except VoiceManifestError as error:
+        raise GameVoiceImportError(f"Invalid voice manifest: {error}") from error
     return manifest_path
 
 

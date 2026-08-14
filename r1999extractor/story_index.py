@@ -5,11 +5,12 @@ import os
 import re
 import sys
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from r1999extractor.atomic_io import atomic_output_path
+from vntts_artifacts.story_index import write_story_index as write_story_index_document
+
 from r1999extractor.reverse1999_aliases import canonical_voice_name
 from r1999extractor.reverse1999_config import (
     Reverse1999ConfigError,
@@ -33,7 +34,6 @@ from r1999extractor.story_audio import (
 
 story_asset_name = "configs/story"
 story_bundle_filename = f"{hashlib.md5(story_asset_name.encode()).hexdigest()}.dat"
-story_index_version = 1
 default_output = get_local_data_directory() / "reverse1999" / "story-index.jsonl"
 rich_text_pattern = re.compile(r"<[^>]*>")
 latin_pattern = re.compile(r"[A-Za-z]")
@@ -480,9 +480,6 @@ def build_story_audio_resolver(
 def write_story_index(lines, output=default_output, *, bundle=None):
     output = Path(output).expanduser().resolve()
     metadata = {
-        "record_type": "metadata",
-        "schema": "vntts.story-index",
-        "schema_version": story_index_version,
         "game": "Reverse: 1999",
         "language": "en",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -495,12 +492,7 @@ def write_story_index(lines, output=default_output, *, bundle=None):
             sorted(Counter(line.story_group for line in lines if line.story_group).items())
         ),
     }
-    with atomic_output_path(output) as temporary:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            stream.write(json.dumps(metadata, ensure_ascii=False, sort_keys=True) + "\n")
-            for line in lines:
-                stream.write(json.dumps(asdict(line), ensure_ascii=False, sort_keys=True) + "\n")
-    return output
+    return write_story_index_document(output, metadata, lines)
 
 
 def create_parser():

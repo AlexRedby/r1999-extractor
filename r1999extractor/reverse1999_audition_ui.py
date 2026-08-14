@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from vntts_artifacts.file_integrity import sha256_file
 
-from r1999extractor.file_integrity import sha256_file
 from r1999extractor.reverse1999_audition import (
     candidate_banks,
     default_bank_index,

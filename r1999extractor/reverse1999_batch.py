@@ -11,8 +11,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
+from vntts_artifacts.atomic_io import atomic_write_json
 
-from r1999extractor.atomic_io import atomic_write_json
 from r1999extractor.reverse1999_aliases import canonical_voice_name
 from r1999extractor.reverse1999_audition import default_mapping_path
 from r1999extractor.reverse1999_catalog import (

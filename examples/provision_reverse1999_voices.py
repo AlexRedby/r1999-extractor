@@ -7,9 +7,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from r1999extractor.atomic_io import atomic_output_path, atomic_write_json
+from vntts_artifacts.atomic_io import atomic_output_path, atomic_write_json
+from vntts_artifacts.text_utils import slugify
+
 from r1999extractor.reverse1999_aliases import aliases_for_character
-from r1999extractor.text_utils import slugify
 
 project_root = Path(__file__).resolve().parents[1]
 default_output = project_root / "data" / "reverse1999-voices"

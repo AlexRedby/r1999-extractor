@@ -6,8 +6,9 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from r1999extractor.atomic_io import atomic_output_path
-from r1999extractor.file_integrity import sha256_file
+from vntts_artifacts.atomic_io import atomic_output_path
+from vntts_artifacts.file_integrity import sha256_file
+
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.story_audio import audio_statuses
 from r1999extractor.story_index import default_output as default_story_index

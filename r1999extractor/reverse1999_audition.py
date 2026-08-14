@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from r1999extractor.atomic_io import atomic_write_json
+from vntts_artifacts.atomic_io import atomic_write_json
+
 from r1999extractor.reverse1999_config import default_output as default_dialogue_index
 from r1999extractor.reverse1999_index import default_output as default_bank_index
 from r1999extractor.settings import get_local_data_directory

@@ -6,7 +6,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from r1999extractor.atomic_io import atomic_write_json
+from vntts_artifacts.atomic_io import atomic_write_json
+
 from r1999extractor.reverse1999_voice_import import (
     find_game_audio_directory,
     is_scene_audio_bank,

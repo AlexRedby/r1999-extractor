@@ -38,14 +38,13 @@ only consume versioned, game-agnostic artifacts.
 
 ## Shared artifact contract
 
-- [ ] Configure an `origin` remote and push this repository before another
+- [x] Configure an `origin` remote and push this repository before another
       project starts depending on its published artifacts or packages.
-- [ ] Extract a narrow shared artifact package with VNTTS instead of keeping
-      independent copies of the story-index schema, voice-manifest v2 schema,
-      generated-audio manifest schema, integrity checks, and atomic publication
+- [x] Extract a narrow shared artifact package with VNTTS for the story-index
+      schema, voice-manifest v2 schema, integrity checks, and atomic publication
       helpers. Keep game extraction, provider integration, and unrelated utility
       code local to this repository.
-- [ ] Replace the duplicated `atomic_io.py`, `file_integrity.py`, and relevant
+- [x] Replace the duplicated `atomic_io.py`, `file_integrity.py`, and relevant
       artifact naming helpers with imports from the shared package after both
       producer and consumer compatibility tests pass.
 
