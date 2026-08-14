@@ -315,13 +315,22 @@ def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=Fal
 
 
 def enrich_story_sources(lines, language, tables, *, include_non_speakable=False):
+    from r1999extractor.structured_story import extract_structured_story_lines
+
     annotated = annotate_anecdote_lines(lines, language, tables)
     hero_lines = extract_hero_story_plot_lines(
         language,
         tables,
         include_non_speakable=include_non_speakable,
     )
-    return annotated + hero_lines
+    structured_lines = extract_structured_story_lines(
+        language,
+        tables,
+        include_non_speakable=include_non_speakable,
+    )
+    existing_ids = {line.line_id for line in annotated}
+    structured_lines = [line for line in structured_lines if line.line_id not in existing_ids]
+    return annotated + hero_lines + structured_lines
 
 
 def find_game_resource_root(home=None, environment=None):

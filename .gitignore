@@ -8,7 +8,18 @@ build/
 dist/
 *.egg-info/
 
-# Never commit extracted proprietary game resources or generated packs.
-data/*.jsonl
-data/local/
+# Never commit extracted or derived game resources and generated packs.
+data/
 output/
+*.bnk
+*.wem
+*.wav
+*.ogg
+*.mp3
+*.dat
+story-index.jsonl
+generation-queue.jsonl
+english-bank-index.json
+dialogue-index.json
+npc-catalog.json
+npc-catalog-overlay.json

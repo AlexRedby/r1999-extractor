@@ -718,7 +718,7 @@ requires-dist = [
     { name = "pyside6", marker = "extra == 'ui'", specifier = ">=6.6" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14" },
     { name = "unitypy", specifier = ">=1.25,<2" },
-    { name = "vntts-artifacts", git = "https://github.com/AlexRedby/vntts-artifacts.git?tag=v0.1.0" },
+    { name = "vntts-artifacts", git = "https://github.com/AlexRedby/vntts-artifacts.git?tag=v0.2.0" },
 ]
 provides-extras = ["ui", "dev"]
 
@@ -863,5 +863,5 @@ wheels = [
 
 [[package]]
 name = "vntts-artifacts"
-version = "0.1.0"
-source = { git = "https://github.com/AlexRedby/vntts-artifacts.git?tag=v0.1.0#b08b35ca256ea242ea18826216d5067dbf6a23bd" }
+version = "0.2.0"
+source = { git = "https://github.com/AlexRedby/vntts-artifacts.git?tag=v0.2.0#90c3c7e7077f11ff18065ce1d13d23a72195ef85" }

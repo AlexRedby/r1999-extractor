@@ -9,7 +9,9 @@ from tempfile import TemporaryDirectory
 from r1999extractor.reverse1999_catalog import (
     Reverse1999CatalogError,
     Reverse1999NpcCatalog,
+    build_catalog_document,
     main,
+    migrate_catalog_to_overlay,
 )
 
 
@@ -78,35 +80,41 @@ class Reverse1999NpcCatalogTest(unittest.TestCase):
 
             self.assertTrue(catalog.validate_reference_files(root))
 
-    def test_shipped_catalog_contains_approved_reference_metadata(self):
-        catalog = Reverse1999NpcCatalog.load()
+    def test_builds_catalog_from_installed_metadata_and_local_overlay(self):
+        language = {"test_name": "Test Character"}
+        character = ["1001", "test_name"] + [""] * 23
+        overlay = {
+            "schema": "r1999.npc-catalog-overlay",
+            "schema_version": 1,
+            "npcs": [
+                {
+                    "id": "1001",
+                    "display_name": "Corrected Test Character",
+                    "aliases": ["Test Alias"],
+                    "approved_references": [],
+                }
+            ],
+        }
+        document = build_catalog_document(
+            language,
+            {"json_character": [character]},
+            {"banks": [{"filename": "voice_npc1001.bnk"}]},
+            overlay=overlay,
+            game_version="test",
+        )
+        catalog = Reverse1999NpcCatalog.from_dict(document)
 
-        self.assertEqual(catalog.version, 1)
-        self.assertEqual(catalog.resolve("Kamuta").npc_id, "520301")
-        self.assertEqual(catalog.resolve("Selone").npc_id, "521001")
-        self.assertEqual(catalog.resolve("Sternova").npc_id, "529801")
-        self.assertEqual(catalog.resolve("Tang Ji").npc_id, "626301")
-        self.assertEqual(catalog.resolve("Creius").npc_id, "523701")
-        self.assertEqual(catalog.resolve("Yermolai").npc_id, "526401")
-        self.assertEqual(catalog.resolve("Hollick").npc_id, "625701")
-        self.assertEqual(catalog.resolve("Special Prosecutor").npc_id, "509101")
-        self.assertEqual(catalog.resolve("Vigil Officer").npc_id, "631501")
-        self.assertEqual(catalog.resolve("Santos").npc_id, "517801")
-        self.assertEqual(catalog.resolve("Professor").npc_id, "505701")
-        self.assertEqual(catalog.resolve("Newsstand Owner").npc_id, "615301")
-        self.assertEqual(
-            catalog.resolve("Selone").banks,
-            ("activityvoc_story_npc521001_diqiu.bnk",),
-        )
-        self.assertEqual(
-            catalog.resolve("Sternova").banks,
-            (
-                "plotvoc_npc529801chapter12_part01.bnk",
-                "plotvoc_npc529801chapter12_part02.bnk",
-            ),
-        )
-        for npc in catalog.npcs:
-            self.assertTrue(npc.approved_references)
+        self.assertEqual(catalog.get("1001").display_name, "Corrected Test Character")
+        self.assertEqual(catalog.resolve("Test Alias").npc_id, "1001")
+        self.assertEqual(catalog.get("1001").banks, ("voice_npc1001.bnk",))
+
+    def test_migrates_combined_catalog_to_review_only_overlay(self):
+        overlay = migrate_catalog_to_overlay(catalog_document())
+
+        self.assertEqual(overlay["schema"], "r1999.npc-catalog-overlay")
+        self.assertNotIn("banks", overlay["npcs"][0])
+        self.assertEqual(overlay["npcs"][0]["aliases"], ["Village Chief"])
+        self.assertEqual(len(overlay["npcs"][0]["approved_references"]), 1)
 
     def test_validation_command_checks_locally_provisioned_references(self):
         with TemporaryDirectory() as temporary_directory:
@@ -126,6 +134,7 @@ class Reverse1999NpcCatalogTest(unittest.TestCase):
             with redirect_stdout(output):
                 result = main(
                     [
+                        "validate",
                         "--catalog",
                         str(catalog_path),
                         "--reference-root",
@@ -146,6 +155,7 @@ class Reverse1999NpcCatalogTest(unittest.TestCase):
             with redirect_stderr(error):
                 result = main(
                     [
+                        "validate",
                         "--catalog",
                         str(catalog_path),
                         "--reference-root",

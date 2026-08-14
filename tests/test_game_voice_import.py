@@ -70,14 +70,37 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
         self.assertEqual(references[0].media_id, 20)
         self.assertEqual(len(references[0].source_sha256), 64)
 
-    def test_known_kamuta_bank_is_resolved_from_game_audio_directory(self):
+    def test_cataloged_bank_is_resolved_from_game_audio_directory(self):
         with TemporaryDirectory() as temporary_directory:
             audio_directory = Path(temporary_directory)
-            bank = audio_directory / "activitystory_yuzhou2_7_yishi_npc520301_voc.bnk"
+            bank = audio_directory / "synthetic_npc1001_voice.bnk"
             bank.write_bytes(b"bank")
+            catalog = audio_directory / "catalog.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "game": "Synthetic Game",
+                        "npcs": [
+                            {
+                                "id": "1001",
+                                "display_name": "Test Character",
+                                "aliases": [],
+                                "language": "en",
+                                "game_versions": ["test"],
+                                "banks": [bank.name],
+                                "approved_references": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             resolved = importer.resolve_bank(
-                "Kamuta", game_audio_directory=audio_directory
+                "Test Character",
+                game_audio_directory=audio_directory,
+                catalog_path=catalog,
             )
 
         self.assertEqual(resolved, bank.resolve())

@@ -34,6 +34,11 @@ r1999-audition = "r1999extractor.reverse1999_audition_ui:main"
 r1999-batch = "r1999extractor.reverse1999_batch:main"
 r1999-catalog = "r1999extractor.reverse1999_catalog:main"
 r1999-generation-queue = "r1999extractor.generation_queue:main"
+r1999-repository-guard = "r1999extractor.repository_guard:main"
+r1999-source-audit = "r1999extractor.source_audit:main"
+r1999-generate = "r1999extractor.bulk_generation:main"
+r1999-benchmark = "r1999extractor.model_benchmark:main"
+r1999-bootstrap = "r1999extractor.bootstrap:main"
 
 [tool.setuptools.packages.find]
 include = ["r1999extractor*"]
@@ -46,4 +51,4 @@ line-length = 100
 select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.uv.sources]
-vntts-artifacts = { git = "https://github.com/AlexRedby/vntts-artifacts.git", tag = "v0.1.0" }
+vntts-artifacts = { git = "https://github.com/AlexRedby/vntts-artifacts.git", tag = "v0.2.0" }

@@ -45,6 +45,8 @@ class GenerationQueueTest(unittest.TestCase):
             ["manual_review", "prefer_source_audio", "generate"],
         )
         self.assertTrue(all(item["state"] == "pending" for item in queue))
+        self.assertTrue(all("emotion" in item for item in queue))
+        self.assertTrue(all("prompt_adapters" in item for item in queue))
 
     def test_groups_alias_normalized_character_then_story_order(self):
         records = [

@@ -9,6 +9,7 @@ from pathlib import Path
 from vntts_artifacts.atomic_io import atomic_output_path
 from vntts_artifacts.file_integrity import sha256_file
 
+from r1999extractor.delivery import annotate_delivery, delivery_annotation_version
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.story_audio import audio_statuses
 from r1999extractor.story_index import default_output as default_story_index
@@ -99,8 +100,7 @@ def build_generation_queue(records):
         voice_character = str(
             record.get("voice_character") or record.get("speaker") or "Narrator"
         ).strip()
-        queue.append(
-            {
+        item = {
                 "record_type": "generation_item",
                 "queue_id": f"{line_id}:{text_sha256[:16]}",
                 "line_id": line_id,
@@ -123,7 +123,16 @@ def build_generation_queue(records):
                 "action": generation_action(audio_status),
                 "state": "pending",
             }
+        item.update(
+            annotate_delivery(
+                text,
+                speaker=item["speaker"],
+                previous_text=item["previous_text"],
+                next_text=item["next_text"],
+                kind=item["kind"],
+            )
         )
+        queue.append(item)
     queue.sort(
         key=lambda item: (
             item["voice_character"].casefold(),
@@ -159,6 +168,7 @@ def write_generation_queue(queue, story_index, output=default_output):
         "source_kind_counts": dict(
             sorted(Counter(item["source_kind"] for item in queue).items())
         ),
+        "delivery_annotation_version": delivery_annotation_version,
     }
     with atomic_output_path(output) as temporary:
         with temporary.open("w", encoding="utf-8", newline="\n") as stream:

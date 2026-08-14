@@ -4,6 +4,15 @@ Local extraction and review tools for creating generic story and voice-pack arti
 
 It does not include game text, audio, decrypted configuration, or generated voice packs. Keep those local and use them only where you have the right to do so.
 
+The repository guard enforces that boundary:
+
+```bash
+r1999-repository-guard
+```
+
+Real game-derived artifacts live under the platform application-data directory.
+Only code, documentation, and small synthetic test fixtures belong in Git.
+
 ## Boundary with VNTTS
 
 This project knows the Reverse: 1999 formats. VNTTS does not. The integration boundary is versioned local artifacts:
@@ -28,6 +37,18 @@ python -m venv .venv
 On Windows, use `.venv\\Scripts\\python` and `.venv\\Scripts\\pip`.
 
 ## Extract all story text
+
+For a clean installation, rebuild every required local artifact in dependency
+order with one command:
+
+```bash
+r1999-bootstrap --game-version installed
+```
+
+This discovers the installed configs, story bundle, and English Wwise banks,
+then creates the bank index, merged NPC catalog, story index, source audit, and
+generation queue. An optional local `npc-catalog-overlay.json` preserves manual
+name corrections and approved reference decisions without committing them.
 
 Automatic discovery supports the macOS/iOS-container installation layout and common Windows `ResLib` layouts:
 
@@ -76,8 +97,57 @@ story order. Each record carries one explicit action:
 - `resolve_audio`: the story index was built without audio resolution.
 
 Against the currently verified local installation, the expanded index contains
-128,720 lines. The queue contains 79,745 non-installed lines: 66,264 ready to
-generate, 13,478 that prefer recoverable source audio, and 3 requiring review.
+147,973 lines. This includes 18,844 schema-declared structured records from 32
+event, activity, tutorial, battle, branch, room, mail, and side-mode tables. The
+queue contains 97,893 non-installed lines: 84,079 ready to generate, 13,811
+that prefer recoverable source audio, and 3 requiring review.
+
+Every queue item includes deterministic emotion evidence, delivery controls,
+and generic, Chatterbox, CosyVoice, and Fish Speech prompt adapters. These are
+starting instructions for generation and remain reviewable rather than being
+treated as ground truth.
+
+Audit every story-like configuration table and see which explicit schema owns
+its localized text:
+
+```bash
+r1999-source-audit
+```
+
+## Generate voices resumably
+
+Provider adapters are ordinary local commands. They receive a JSON request and
+must write a mono PCM16 WAV to the requested output path:
+
+```bash
+r1999-generate generate \
+  --provider local \
+  --model my-model \
+  --provider-command 'python /path/to/adapter.py --request {request} --output {output}'
+```
+
+Generation is resumable and records provider, model, prompt, seed, attempts,
+technical WAV quality, and failures after every item. New files remain outside
+the runtime manifest until explicitly approved:
+
+```bash
+r1999-generate review '<queue-id>' approved
+```
+
+The published `vntts.generated-audio` manifest maps the stable line ID plus
+current text SHA-256 to a verified local WAV. VNTTS uses it only on an exact
+match and falls back to live TTS for stale, missing, rejected, or modified
+audio.
+
+Compare any set of local models on the same emotion-stratified sample:
+
+```bash
+r1999-benchmark --models /path/to/local-models.json
+```
+
+The report collects technical success and provides a common manual scoring
+rubric for emotion, voice consistency, naturalness, and pronunciation. Model
+configuration and generated samples stay local.
 
 Configure VNTTS with the generated story index and the voice manifest produced by the import/review tools. Extracted artifacts are deliberately ignored by Git.
 
