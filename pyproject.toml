@@ -32,6 +32,7 @@ r1999-config-index = "r1999extractor.reverse1999_config:main"
 r1999-audition = "r1999extractor.reverse1999_audition_ui:main"
 r1999-batch = "r1999extractor.reverse1999_batch:main"
 r1999-catalog = "r1999extractor.reverse1999_catalog:main"
+r1999-generation-queue = "r1999extractor.generation_queue:main"
 
 [tool.setuptools.packages.find]
 include = ["r1999extractor*"]

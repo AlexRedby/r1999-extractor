@@ -13,6 +13,11 @@ This project knows the Reverse: 1999 formats. VNTTS does not. The integration bo
 
 The JSONL file starts with one metadata record followed by line records. Each line has a stable ID, chapter, sequence, speaker, text, source information, and optional delivery hints.
 
+The extractor also emits `generation-queue.jsonl` using
+`vntts.voice-generation-queue` schema version 1. Queue items are pinned to a
+stable line ID and text hash, so text changes cannot accidentally reuse stale
+generated audio.
+
 ## Setup
 
 ```bash
@@ -37,9 +42,11 @@ r1999-story-index --resource-root /path/to/ResLib/iOS --output ./output/story-in
 ```
 
 By default this command keeps English speakable records, strips Unity rich-text
-markup, normalizes known speaker aliases, adds previous/next-line context, and
-resolves every original voice cue against decrypted audio configuration and the
-installed Wwise media. It rebuilds an outdated bank index automatically.
+markup, normalizes known speaker aliases, adds previous/next-line context,
+classifies the 25 legacy anecdote chapters, adds config-only interactive hero
+stories, and resolves every original voice cue against decrypted audio
+configuration and the installed Wwise media. It rebuilds an outdated bank index
+automatically.
 
 Every output line has one explicit audio status:
 
@@ -52,6 +59,25 @@ Every output line has one explicit audio status:
 Use `--include-non-speakable` for a preservation-oriented export containing
 localized test, placeholder, and non-English records. Use
 `--skip-audio-resolution` only when a text-only index is sufficient.
+
+## Build the pregeneration queue
+
+```bash
+r1999-generation-queue
+```
+
+The command reads the story index and includes every speakable line without
+installed source audio. It groups records by canonical voice character and then
+story order. Each record carries one explicit action:
+
+- `generate`: the source definitively has no audio;
+- `prefer_source_audio`: a configured source route exists but is not installed;
+- `manual_review`: the source cue could not be resolved;
+- `resolve_audio`: the story index was built without audio resolution.
+
+Against the currently verified local installation, the expanded index contains
+128,720 lines. The queue contains 79,745 non-installed lines: 66,264 ready to
+generate, 13,478 that prefer recoverable source audio, and 3 requiring review.
 
 Configure VNTTS with the generated story index and the voice manifest produced by the import/review tools. Extracted artifacts are deliberately ignored by Git.
 

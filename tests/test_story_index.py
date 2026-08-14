@@ -5,7 +5,9 @@ from tempfile import TemporaryDirectory
 
 from r1999extractor.story_index import (
     add_story_context,
+    annotate_anecdote_lines,
     classify_speakable_english,
+    extract_hero_story_plot_lines,
     parse_story_document,
     write_story_index,
 )
@@ -90,6 +92,68 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(lines[0].text, "First line.")
         self.assertEqual(lines[0].next_text, "Second line.")
         self.assertEqual(lines[1].previous_text, "First line.")
+
+    def test_classifies_anecdote_assets_without_duplicating_lines(self):
+        lines = parse_story_document(
+            ["title", "", [[1, "step", payload("A", "Anecdote line.")]]],
+            "json_story_step_301801",
+        )
+        language = {
+            "hero": "Test Character",
+            "story": "Synthetic Anecdote",
+            "episode": "Synthetic Episode",
+        }
+        tables = {
+            "json_hero_story": [
+                [1, 1901, "", "", "hero", 0, 0, 1, "story", "fallback"]
+            ],
+            "json_episode": [
+                [190101, 1901, 4, "episode", "fallback", "", "", 301801]
+            ],
+        }
+
+        annotated = annotate_anecdote_lines(lines, language, tables)
+
+        self.assertEqual(len(annotated), 1)
+        self.assertEqual(annotated[0].source_kind, "anecdote")
+        self.assertEqual(annotated[0].story_group, "1901")
+        self.assertEqual(annotated[0].story_title, "Synthetic Anecdote")
+        self.assertEqual(annotated[0].episode_title, "Synthetic Episode")
+
+    def test_extracts_config_only_hero_story_dialogue_and_narration(self):
+        language = {
+            "hero": "Test Hero",
+            "story": "Synthetic Story",
+            "episode": "Synthetic Chapter",
+            "role": "{roleName}",
+            "dialogue": "A synthetic dialogue line.",
+            "aside": "A synthetic narration line.",
+            "control": "Tap to continue",
+        }
+        tables = {
+            "json_hero_story": [
+                [26, 0, "", "", "hero", 0, 0, 26, "story", "fallback"]
+            ],
+            "json_hero_story_plot_group": [
+                [303701, 26, "episode", "fallback", 0, "", 1, "hero"]
+            ],
+            "json_hero_story_plot": [
+                [303701004, 303701, "dialog", "", "role", "dialogue"],
+                [303701005, 303701, "aside", "", "", "aside"],
+                [303701006, 303701, "control", "", "", "control"],
+            ],
+        }
+
+        lines = extract_hero_story_plot_lines(language, tables)
+
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0].speaker, "Test Hero")
+        self.assertEqual(lines[0].source_kind, "hero_story_plot")
+        self.assertEqual(lines[0].audio_status, "no_audio")
+        self.assertEqual(lines[0].story_title, "Synthetic Story")
+        self.assertEqual(lines[0].episode_title, "Synthetic Chapter")
+        self.assertEqual(lines[0].next_text, "A synthetic narration line.")
+        self.assertEqual(lines[1].kind, "narration")
 
 
 if __name__ == "__main__":

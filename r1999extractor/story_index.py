@@ -71,6 +71,11 @@ class StoryLine:
     source_bank: str | None = None
     source_media_ids: tuple[int, ...] = ()
     available_media_ids: tuple[int, ...] = ()
+    source_kind: str = "story"
+    story_group: str | None = None
+    story_title: str | None = None
+    episode_title: str | None = None
+    story_order: int | None = None
 
 
 def _localized(value, language_index):
@@ -149,6 +154,174 @@ def parse_story_document(document, source, *, language_index=2, include_non_spea
             )
         )
     return lines
+
+
+def _language_text(language, key, fallback=""):
+    value = language.get(key) if isinstance(key, str) else None
+    if not isinstance(value, str) or not value.strip():
+        value = fallback
+    return clean_story_text(value) if isinstance(value, str) and value.strip() else ""
+
+
+def annotate_anecdote_lines(lines, language, tables):
+    """Classify story-step assets owned by the first-generation anecdote system."""
+    anecdotes = {}
+    for story_position, row in enumerate(tables.get("json_hero_story", []), start=1):
+        if not isinstance(row, list) or len(row) <= 9:
+            continue
+        try:
+            anecdote_chapter = int(row[1])
+        except (TypeError, ValueError):
+            continue
+        if anecdote_chapter <= 0:
+            continue
+        anecdotes[anecdote_chapter] = {
+            "story_title": _language_text(language, row[8], row[9]),
+            "story_order": story_position,
+        }
+
+    by_source = {}
+    episode_positions = defaultdict(int)
+    for row in tables.get("json_episode", []):
+        if not isinstance(row, list) or len(row) <= 7:
+            continue
+        try:
+            anecdote_chapter = int(row[1])
+            story_step = int(row[7])
+        except (TypeError, ValueError):
+            continue
+        anecdote = anecdotes.get(anecdote_chapter)
+        if anecdote is None or story_step <= 0:
+            continue
+        episode_positions[anecdote_chapter] += 1
+        by_source[f"json_story_step_{story_step}"] = {
+            **anecdote,
+            "story_group": str(anecdote_chapter),
+            "episode_title": _language_text(
+                language,
+                row[3] if len(row) > 3 else "",
+                row[4] if len(row) > 4 else "",
+            ),
+            "episode_order": episode_positions[anecdote_chapter],
+        }
+
+    annotated = []
+    for line in lines:
+        metadata = by_source.get(line.source)
+        if metadata is None:
+            annotated.append(line)
+            continue
+        annotated.append(
+            replace(
+                line,
+                source_kind="anecdote",
+                story_group=metadata["story_group"],
+                story_title=metadata["story_title"] or None,
+                episode_title=metadata["episode_title"] or None,
+                story_order=(metadata["story_order"] * 1_000) + metadata["episode_order"],
+            )
+        )
+    return annotated
+
+
+def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=False):
+    """Extract spoken and narratable text from config-only interactive hero stories."""
+    hero_stories = {}
+    for position, row in enumerate(tables.get("json_hero_story", []), start=1):
+        if not isinstance(row, list) or len(row) <= 9:
+            continue
+        try:
+            story_id = int(row[0])
+        except (TypeError, ValueError):
+            continue
+        hero_stories[story_id] = {
+            "title": _language_text(language, row[8], row[9]),
+            "character": _language_text(language, row[4]),
+            "order": position,
+        }
+
+    plot_groups = {}
+    for row in tables.get("json_hero_story_plot_group", []):
+        if not isinstance(row, list) or len(row) <= 7:
+            continue
+        try:
+            group_id = int(row[0])
+            story_id = int(row[1])
+        except (TypeError, ValueError):
+            continue
+        story = hero_stories.get(story_id, {})
+        plot_groups[group_id] = {
+            "story_title": story.get("title") or _language_text(language, row[2], row[3]),
+            "episode_title": _language_text(language, row[2], row[3]),
+            "character": story.get("character") or _language_text(language, row[7]),
+            "story_order": story.get("order", story_id),
+        }
+
+    allowed_types = {"dialog", "aside", "location"}
+    lines = []
+    group_positions = defaultdict(int)
+    for row in tables.get("json_hero_story_plot", []):
+        if not isinstance(row, list) or len(row) <= 5:
+            continue
+        plot_type = str(row[2]).strip()
+        if plot_type not in allowed_types:
+            continue
+        try:
+            plot_id = int(row[0])
+            group_id = int(row[1])
+        except (TypeError, ValueError):
+            continue
+        text = _language_text(language, row[5])
+        if not text:
+            continue
+        speakable, filter_reason = classify_speakable_english(text, str(group_id))
+        if not speakable and not include_non_speakable:
+            continue
+        group = plot_groups.get(group_id, {})
+        raw_speaker = _language_text(language, row[4]) if plot_type == "dialog" else ""
+        if "{roleName}" in raw_speaker:
+            raw_speaker = raw_speaker.replace("{roleName}", group.get("character", ""))
+        speaker = raw_speaker or "Narrator"
+        group_positions[group_id] += 1
+        lines.append(
+            StoryLine(
+                record_type="line",
+                line_id=f"reverse1999:hero-story-plot:{plot_id}",
+                chapter=str(group_id),
+                sequence=plot_id,
+                speaker=speaker,
+                text=text,
+                source="json_hero_story_plot",
+                portrait=None,
+                source_voice_id=None,
+                source_voice_spec=None,
+                display_seconds=None,
+                kind="dialogue" if plot_type == "dialog" else "narration",
+                voice_character=canonical_voice_name(speaker) or speaker,
+                text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                speakable=speakable,
+                filter_reason=filter_reason,
+                audio_status="no_audio",
+                audio_reason="config_story_has_no_voice_cue",
+                source_kind="hero_story_plot",
+                story_group=str(group_id),
+                story_title=group.get("story_title") or None,
+                episode_title=group.get("episode_title") or None,
+                story_order=(group.get("story_order", group_id) * 10_000)
+                + group_positions[group_id],
+            )
+        )
+    return add_story_context(lines)
+
+
+def enrich_story_sources(lines, language, tables, *, include_non_speakable=False):
+    annotated = annotate_anecdote_lines(lines, language, tables)
+    hero_lines = extract_hero_story_plot_lines(
+        language,
+        tables,
+        include_non_speakable=include_non_speakable,
+    )
+    return annotated + hero_lines
 
 
 def find_game_resource_root(home=None, environment=None):
@@ -317,6 +490,10 @@ def write_story_index(lines, output=default_output, *, bundle=None):
         "line_count": len(lines),
         "speakable_count": sum(line.speakable for line in lines),
         "audio_status_counts": dict(sorted(Counter(line.audio_status for line in lines).items())),
+        "source_kind_counts": dict(sorted(Counter(line.source_kind for line in lines).items())),
+        "story_group_counts": dict(
+            sorted(Counter(line.story_group for line in lines if line.story_group).items())
+        ),
     }
     with atomic_output_path(output) as temporary:
         with temporary.open("w", encoding="utf-8", newline="\n") as stream:
@@ -350,6 +527,11 @@ def create_parser():
         action="store_true",
         help="Write unchecked lines without scanning config and local Wwise media.",
     )
+    parser.add_argument(
+        "--skip-config-sources",
+        action="store_true",
+        help="Exclude config-only hero stories and anecdote classification.",
+    )
     return parser
 
 
@@ -372,6 +554,20 @@ def main(arguments=None):
                 else None
             ),
         )
+        if not options.skip_config_sources:
+            config_directory = options.config_directory or find_game_config_directory()
+            if config_directory is None:
+                raise Reverse1999StoryError(
+                    "Unable to find installed game configs; pass --config-directory "
+                    "or --skip-config-sources"
+                )
+            language, tables = load_config_directory(config_directory)
+            lines = enrich_story_sources(
+                lines,
+                language,
+                tables,
+                include_non_speakable=options.include_non_speakable,
+            )
         if not options.skip_audio_resolution:
             resolver = build_story_audio_resolver(
                 config_directory=options.config_directory,
