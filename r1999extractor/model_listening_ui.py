@@ -62,6 +62,11 @@ class SeekSlider(QSlider):
 
 
 class ModelListeningDialog(QDialog):
+    side_colors = {
+        "a": {"normal": "#2563eb", "disabled": "#1e3a5f", "border": "#bfdbfe"},
+        "b": {"normal": "#ea580c", "disabled": "#5f301f", "border": "#fed7aa"},
+    }
+
     def __init__(self, session_path, parent=None, *, auto_play=True):
         super().__init__(parent)
         self.session_path = Path(session_path).expanduser().resolve()
@@ -83,14 +88,23 @@ class ModelListeningDialog(QDialog):
         self.play_a = QPushButton("Play A")
         self.play_b = QPushButton("Play B")
         self.stop = QPushButton("Stop")
+        playback_control_width = max(
+            self.stop.fontMetrics().horizontalAdvance(label)
+            for label in ("Stop", "Continue", "Start again")
+        )
+        self.stop.setFixedWidth(playback_control_width + 36)
         self.play_a.clicked.connect(lambda: self.play("a"))
         self.play_b.clicked.connect(lambda: self.play("b"))
-        self.stop.clicked.connect(self.stop_audio)
+        self.stop.clicked.connect(self.toggle_playback)
+
+        self.now_playing = QLabel()
+        self.now_playing.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.now_playing.setMinimumHeight(46)
 
         playback = QHBoxLayout()
         playback.addWidget(self.play_a)
         playback.addWidget(self.play_b)
-        playback.addWidget(self.stop)
+        self.playback_controls = playback
 
         self.skip_back = QPushButton("-5s")
         self.seek = SeekSlider(Qt.Orientation.Horizontal)
@@ -106,10 +120,19 @@ class ModelListeningDialog(QDialog):
         seek_controls.addWidget(self.seek, 1)
         seek_controls.addWidget(self.skip_forward)
         seek_controls.addWidget(self.time)
+        seek_controls.addWidget(self.stop)
+        self.seek_controls = seek_controls
 
         self.prefer_a = QPushButton("A is better")
         self.tie = QPushButton("No preference")
         self.prefer_b = QPushButton("B is better")
+        self.apply_side_button_style(self.prefer_a, "a")
+        self.tie.setStyleSheet(
+            "QPushButton { background-color: #52525b; color: white;"
+            " font-weight: 700; padding: 6px; }"
+            "QPushButton:disabled { background-color: #3f3f46; color: #a1a1aa; }"
+        )
+        self.apply_side_button_style(self.prefer_b, "b")
         self.prefer_a.clicked.connect(lambda: self.save_preference("a"))
         self.tie.clicked.connect(lambda: self.save_preference("tie"))
         self.prefer_b.clicked.connect(lambda: self.save_preference("b"))
@@ -125,6 +148,7 @@ class ModelListeningDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self.progress)
         layout.addWidget(self.dialogue, 1)
+        layout.addWidget(self.now_playing)
         layout.addLayout(playback)
         layout.addLayout(seek_controls)
         layout.addLayout(decisions)
@@ -145,6 +169,78 @@ class ModelListeningDialog(QDialog):
         self.tie.setEnabled(enabled)
         self.prefer_b.setEnabled(enabled)
 
+    def apply_side_button_style(self, button, side, *, active=False):
+        colors = self.side_colors[side]
+        border_color = colors["border"] if active else colors["normal"]
+        button.setStyleSheet(
+            "QPushButton {"
+            f" background-color: {colors['normal']};"
+            " color: white; font-weight: 700;"
+            f" border: 4px solid {border_color};"
+            " border-radius: 5px; padding: 6px;"
+            "}"
+            "QPushButton:disabled {"
+            f" background-color: {colors['disabled']};"
+            " color: #a1a1aa; border: 4px solid #52525b;"
+            "}"
+        )
+
+    def set_playback_indicator(self, state, side=None):
+        self.playback_control_state = state
+        side_label = side.upper() if side else None
+        self.play_a.setText("Play A")
+        self.play_b.setText("Play B")
+        self.apply_side_button_style(self.play_a, "a")
+        self.apply_side_button_style(self.play_b, "b")
+
+        colors = {
+            "ready": ("READY", "#3f3f46"),
+            "loading": (
+                f"LOADING: {side_label}",
+                self.side_colors.get(side, {}).get("normal", "#3f3f46"),
+            ),
+            "playing": (
+                f"NOW PLAYING: {side_label}",
+                self.side_colors.get(side, {}).get("normal", "#3f3f46"),
+            ),
+            "finished": (
+                f"FINISHED: {side_label}",
+                self.side_colors.get(side, {}).get("normal", "#3f3f46"),
+            ),
+            "stopped": (
+                f"STOPPED: {side_label}" if side_label else "STOPPED",
+                self.side_colors.get(side, {}).get("normal", "#3f3f46"),
+            ),
+            "complete": ("SESSION COMPLETE", "#3f3f46"),
+        }
+        label, background = colors[state]
+        self.now_playing.setText(label)
+        self.now_playing.setStyleSheet(
+            "QLabel {"
+            f" background-color: {background};"
+            " color: white; font-size: 18px; font-weight: 700;"
+            " border-radius: 6px; padding: 8px;"
+            "}"
+        )
+
+        stop_labels = {
+            "ready": "Stop",
+            "loading": "Stop",
+            "playing": "Stop",
+            "stopped": "Continue",
+            "finished": "Start again",
+            "complete": "Stop",
+        }
+        self.stop.setText(stop_labels[state])
+        self.stop.setEnabled(state not in {"ready", "complete"})
+
+        if side is None or state not in {"loading", "playing"}:
+            return
+        active_button = self.play_a if side == "a" else self.play_b
+        verb = "LOADING" if state == "loading" else "PLAYING"
+        active_button.setText(f"{verb} {side_label}")
+        self.apply_side_button_style(active_button, side, active=True)
+
     def load_next_trial(self):
         self.session = load_listening_session(self.session_path)
         completed, total = listening_progress(self.session)
@@ -158,6 +254,7 @@ class ModelListeningDialog(QDialog):
         self.time.setText("0:00 / 0:00")
         self.set_preference_buttons_enabled(False)
         if self.current_trial is None:
+            self.set_playback_indicator("complete")
             report_path = self.session_path.with_name("report.json")
             report = aggregate_listening_report(self.session_path, report_path)
             leader = report["models"][0]["model_id"] if report["models"] else "none"
@@ -172,6 +269,7 @@ class ModelListeningDialog(QDialog):
             self.seek.setEnabled(False)
             self.skip_forward.setEnabled(False)
             return
+        self.set_playback_indicator("ready")
         self.play_a.setEnabled(True)
         self.play_b.setEnabled(True)
         self.skip_back.setEnabled(True)
@@ -200,6 +298,7 @@ class ModelListeningDialog(QDialog):
         if side == "b":
             self.auto_play_pending_b = False
         self.active_side = side
+        self.set_playback_indicator("loading", side)
         relative = self.current_trial["audio"][side]
         path = self.session_path.parent / relative
         self.player.setSource(QUrl.fromLocalFile(str(path)))
@@ -210,17 +309,17 @@ class ModelListeningDialog(QDialog):
     def playback_state_changed(self, state):
         if state != QMediaPlayer.PlaybackState.PlayingState or self.active_side is None:
             return
+        self.set_playback_indicator("playing", self.active_side)
         self.started_sides.add(self.active_side)
         if self.started_sides == {"a", "b"}:
             self.set_preference_buttons_enabled(True)
             self.status.setText("Both samples have started. Choose A, no preference, or B.")
 
     def media_status_changed(self, status):
-        if (
-            status == QMediaPlayer.MediaStatus.EndOfMedia
-            and self.active_side == "a"
-            and self.auto_play_pending_b
-        ):
+        if status != QMediaPlayer.MediaStatus.EndOfMedia or self.active_side is None:
+            return
+        self.set_playback_indicator("finished", self.active_side)
+        if self.active_side == "a" and self.auto_play_pending_b:
             self.auto_play_pending_b = False
             QTimer.singleShot(0, lambda: self.play("b", automatic=True))
 
@@ -259,6 +358,23 @@ class ModelListeningDialog(QDialog):
     def stop_audio(self):
         self.auto_play_pending_b = False
         self.player.stop()
+        self.set_playback_indicator("stopped", self.active_side)
+
+    def toggle_playback(self):
+        if self.current_trial is None or self.active_side is None:
+            return
+        if self.playback_control_state == "stopped":
+            self.set_playback_indicator("loading", self.active_side)
+            self.player.play()
+            return
+        if self.playback_control_state == "finished":
+            self.player.setPosition(0)
+            self.set_playback_indicator("loading", self.active_side)
+            self.player.play()
+            return
+        if self.playback_control_state in {"loading", "playing"}:
+            self.player.pause()
+            self.set_playback_indicator("stopped", self.active_side)
 
     def save_preference(self, preference):
         if self.current_trial is None:

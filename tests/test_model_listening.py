@@ -282,11 +282,30 @@ class ModelListeningDialogTest(unittest.TestCase):
             session_path = create_listening_session(benchmark, root / "session")
             dialog = ModelListeningDialog(session_path, auto_play=False)
             dialog.player = Mock()
+            initial_button_heights = (
+                dialog.play_a.sizeHint().height(),
+                dialog.play_b.sizeHint().height(),
+            )
+            playback_control_width = dialog.stop.width()
 
             dialog.start_auto_playback()
             dialog.playback_state_changed(QMediaPlayer.PlaybackState.PlayingState)
             self.assertEqual(dialog.started_sides, {"a"})
             self.assertFalse(dialog.tie.isEnabled())
+            self.assertEqual(dialog.now_playing.text(), "NOW PLAYING: A")
+            self.assertEqual(dialog.play_a.text(), "PLAYING A")
+            self.assertEqual(dialog.play_b.text(), "Play B")
+            self.assertIn("#2563eb", dialog.now_playing.styleSheet())
+            self.assertIn("#2563eb", dialog.play_a.styleSheet())
+            self.assertIn("#2563eb", dialog.prefer_a.styleSheet())
+            self.assertIn("#ea580c", dialog.play_b.styleSheet())
+            self.assertIn("#ea580c", dialog.prefer_b.styleSheet())
+            self.assertEqual(dialog.playback_controls.indexOf(dialog.stop), -1)
+            self.assertGreaterEqual(dialog.seek_controls.indexOf(dialog.stop), 0)
+            self.assertEqual(
+                (dialog.play_a.sizeHint().height(), dialog.play_b.sizeHint().height()),
+                initial_button_heights,
+            )
 
             dialog.media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
             self.application.processEvents()
@@ -295,6 +314,32 @@ class ModelListeningDialogTest(unittest.TestCase):
             self.assertEqual(dialog.started_sides, {"a", "b"})
             self.assertTrue(dialog.tie.isEnabled())
             self.assertEqual(dialog.player.play.call_count, 2)
+            self.assertEqual(dialog.now_playing.text(), "NOW PLAYING: B")
+            self.assertEqual(dialog.play_a.text(), "Play A")
+            self.assertEqual(dialog.play_b.text(), "PLAYING B")
+            self.assertIn("#ea580c", dialog.now_playing.styleSheet())
+            self.assertEqual(
+                (dialog.play_a.sizeHint().height(), dialog.play_b.sizeHint().height()),
+                initial_button_heights,
+            )
+            dialog.toggle_playback()
+            dialog.player.pause.assert_called_once_with()
+            self.assertEqual(dialog.now_playing.text(), "STOPPED: B")
+            self.assertEqual(dialog.stop.text(), "Continue")
+            self.assertEqual(dialog.stop.width(), playback_control_width)
+            self.assertEqual(dialog.play_b.text(), "Play B")
+
+            dialog.toggle_playback()
+            dialog.playback_state_changed(QMediaPlayer.PlaybackState.PlayingState)
+            self.assertEqual(dialog.now_playing.text(), "NOW PLAYING: B")
+            self.assertEqual(dialog.stop.text(), "Stop")
+
+            dialog.media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
+            self.assertEqual(dialog.now_playing.text(), "FINISHED: B")
+            self.assertEqual(dialog.stop.text(), "Start again")
+            self.assertEqual(dialog.stop.width(), playback_control_width)
+            dialog.toggle_playback()
+            dialog.player.setPosition.assert_called_once_with(0)
             dialog.deleteLater()
 
     def test_seeks_and_skips_within_the_active_sample(self):
