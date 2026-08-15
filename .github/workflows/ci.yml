@@ -59,7 +59,5 @@ jobs:
       - name: Install locked UI dependencies
         run: uv sync --extra ui --frozen
 
-      - name: Run Qt audition tests
-        run: >-
-          uv run --frozen --extra ui python scripts/run_ci_unittests.py discover
-          -s tests -p 'test_reverse1999_audition.py'
+      - name: Run tests with Qt dependencies
+        run: uv run --frozen --extra ui python scripts/run_ci_unittests.py discover -s tests

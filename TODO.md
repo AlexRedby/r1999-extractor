@@ -6,9 +6,6 @@ git history and stable behavior belongs in project documentation.
 
 ## Ahead-of-time voice generation
 
-- [ ] Build a blind, randomized, resumable same-text A/B listening workbench.
-      Record timbre, accent, naturalness, and pronunciation scores and produce
-      an aggregate comparison automatically.
 - [ ] Complete the human listening scores for the locally installed candidate
       models and select the production model before generating the full
       estimated backlog. This is an explicit perceptual acceptance gate, not an

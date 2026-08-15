@@ -146,9 +146,29 @@ Compare any set of local models on the same emotion-stratified sample:
 r1999-benchmark --models /path/to/local-models.json
 ```
 
-The report collects technical success and provides a common manual scoring
-rubric for emotion, voice consistency, naturalness, and pronunciation. Model
-configuration and generated samples stay local.
+Create a blind same-text A/B listening session after generation, then reopen the
+UI at any time to resume it:
+
+```bash
+r1999-listen start --benchmark /path/to/model-benchmark/benchmark-report.json
+r1999-listen ui
+r1999-listen status
+r1999-listen report
+```
+
+Existing same-text per-model reports can be reused without regenerating audio:
+
+```bash
+r1999-listen start-reports --reports /path/to/model-a.json /path/to/model-b.json
+r1999-listen ui
+```
+
+The workbench randomizes trial and A/B order, exposes only neutral audio aliases,
+and saves progress after each simple choice: A, B, or no preference. It avoids
+subjective numeric scales and specialist labels such as timbre or accent. The
+model key is stored separately in `.blind-key.json`; the aggregate preference
+report is unblinded and still requires an explicit human production-model
+decision. Model configuration and generated samples stay local.
 
 Configure VNTTS with the generated story index and the voice manifest produced by the import/review tools. Extracted artifacts are deliberately ignored by Git.
 

@@ -95,12 +95,7 @@ def benchmark_models(queue_path, output_directory, providers, *, sample_size=24,
                 if qualities
                 else None,
                 "manifest": str(result["manifest"]),
-                "manual_scores": {
-                    "emotion": None,
-                    "voice_consistency": None,
-                    "naturalness": None,
-                    "pronunciation": None,
-                },
+                "state": str(result["state"]),
             }
         )
     report = benchmark_codec.new(
