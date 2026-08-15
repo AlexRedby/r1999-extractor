@@ -47,9 +47,7 @@ def decrypt_config_data(data):
         raise Reverse1999ConfigError("Encrypted config is missing its payload")
     ciphertext = data[config_header_size:]
     if len(ciphertext) % 16:
-        raise Reverse1999ConfigError(
-            "Encrypted config payload is not aligned to an AES block"
-        )
+        raise Reverse1999ConfigError("Encrypted config payload is not aligned to an AES block")
     try:
         decryptor = Cipher(algorithms.AES(config_key), modes.CBC(config_iv)).decryptor()
         padded = decryptor.update(ciphertext) + decryptor.finalize()
@@ -69,17 +67,11 @@ def load_encrypted_json(path):
     except FileNotFoundError as error:
         raise Reverse1999ConfigError(f"Config does not exist: {path}") from error
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise Reverse1999ConfigError(
-            f"Unable to read config {path}: {error}"
-        ) from error
+        raise Reverse1999ConfigError(f"Unable to read config {path}: {error}") from error
 
 
 def parse_language_document(document):
-    if (
-        not isinstance(document, list)
-        or len(document) != 2
-        or not isinstance(document[1], list)
-    ):
+    if not isinstance(document, list) or len(document) != 2 or not isinstance(document[1], list):
         raise Reverse1999ConfigError("Language config has an unsupported structure")
     language = {}
     for row in document[1]:
@@ -106,11 +98,7 @@ def parse_data_document(document):
             raise Reverse1999ConfigError(
                 f"Table {table_name} is not valid JSON: {error}"
             ) from error
-        if (
-            not isinstance(table, list)
-            or len(table) != 2
-            or not isinstance(table[1], list)
-        ):
+        if not isinstance(table, list) or len(table) != 2 or not isinstance(table[1], list):
             # A few internal metadata entries use a different schema. They are
             # unrelated to dialogue and can safely be ignored.
             continue
@@ -162,9 +150,7 @@ def extract_character_identities(language, tables):
         fallback = row[24] if len(row) > 24 and isinstance(row[24], str) else ""
         display_name = language.get(language_key) or fallback
         if display_name:
-            identities[character_id] = CharacterIdentity(
-                character_id, display_name, language_key
-            )
+            identities[character_id] = CharacterIdentity(character_id, display_name, language_key)
     return identities
 
 
@@ -176,8 +162,7 @@ def resolve_speaker_name(speaker_id, identities, catalog=None):
     matching_ids = [
         character_id
         for character_id in identities
-        if speaker_id.startswith(character_id)
-        and len(speaker_id) - len(character_id) <= 2
+        if speaker_id.startswith(character_id) and len(speaker_id) - len(character_id) <= 2
     ]
     if matching_ids:
         return identities[max(matching_ids, key=len)].display_name

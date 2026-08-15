@@ -128,9 +128,7 @@ class VoiceReferenceQualityTest(unittest.TestCase):
             selected = select_reference_set(document["clips"], "Selone")
 
         self.assertEqual(len(selected), 4)
-        self.assertEqual(
-            sum(item["metrics"]["duration_seconds"] for item in selected), 18.5
-        )
+        self.assertEqual(sum(item["metrics"]["duration_seconds"] for item in selected), 18.5)
         self.assertTrue(all(item["approved"] for item in selected))
 
 

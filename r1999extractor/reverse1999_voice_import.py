@@ -177,9 +177,7 @@ def decode_references(
             )
         selected = [by_id[media_id] for media_id in dict.fromkeys(media_ids)]
     else:
-        selected = sorted(media, key=lambda entry: entry.size, reverse=True)[
-            :reference_count
-        ]
+        selected = sorted(media, key=lambda entry: entry.size, reverse=True)[:reference_count]
     if not selected:
         raise GameVoiceImportError(f"Voice bank contains no embedded media: {bank}")
 
@@ -230,8 +228,7 @@ def update_manifest(output_directory, character, references, source_bank):
         "character": character.strip(),
         "speaker": f"reverse-1999-{slugify(character, fallback='character')}-game-v1",
         "references": [
-            reference.relative_to(output_directory).as_posix()
-            for reference in reference_paths
+            reference.relative_to(output_directory).as_posix() for reference in reference_paths
         ],
         "aliases": list(aliases_for_character(character)),
         "sources": [
@@ -246,11 +243,7 @@ def update_manifest(output_directory, character, references, source_bank):
             )
         ],
     }
-    imported = [
-        reference
-        for reference in references
-        if isinstance(reference, ImportedReference)
-    ]
+    imported = [reference for reference in references if isinstance(reference, ImportedReference)]
     if imported:
         entry["reference_metadata"] = [
             {
@@ -298,8 +291,5 @@ def main(arguments=None):
     except (GameVoiceImportError, WwiseBankError, AudioConversionError) as error:
         return cli_error(error)
 
-    print(
-        f"Imported {len(references)} clean references for {arguments.character} "
-        f"into {manifest}"
-    )
+    print(f"Imported {len(references)} clean references for {arguments.character} into {manifest}")
     return 0

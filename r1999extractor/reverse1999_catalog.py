@@ -22,9 +22,7 @@ catalog_schema = "r1999.npc-catalog"
 catalog_schema_version = 1
 overlay_schema = "r1999.npc-catalog-overlay"
 overlay_schema_version = 1
-overlay_codec = VersionedJSONCodec(
-    overlay_schema, overlay_schema_version, "NPC catalog overlay"
-)
+overlay_codec = VersionedJSONCodec(overlay_schema, overlay_schema_version, "NPC catalog overlay")
 
 
 class Reverse1999CatalogError(RuntimeError):
@@ -83,9 +81,7 @@ class Reverse1999NpcCatalog:
             for approved in npc.approved_references:
                 reference = root / approved.reference
                 if not reference.is_file():
-                    raise Reverse1999CatalogError(
-                        f"Approved reference does not exist: {reference}"
-                    )
+                    raise Reverse1999CatalogError(f"Approved reference does not exist: {reference}")
                 checksum = sha256_file(reference)
                 if checksum != approved.reference_sha256:
                     raise Reverse1999CatalogError(
@@ -99,13 +95,9 @@ class Reverse1999NpcCatalog:
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError as error:
-            raise Reverse1999CatalogError(
-                f"NPC catalog does not exist: {path}"
-            ) from error
+            raise Reverse1999CatalogError(f"NPC catalog does not exist: {path}") from error
         except (OSError, json.JSONDecodeError) as error:
-            raise Reverse1999CatalogError(
-                f"Unable to read NPC catalog {path}: {error}"
-            ) from error
+            raise Reverse1999CatalogError(f"Unable to read NPC catalog {path}: {error}") from error
         return cls.from_dict(document)
 
     @classmethod
@@ -159,13 +151,9 @@ class Reverse1999NpcCatalog:
         if not game_versions:
             raise Reverse1999CatalogError(f"NPC entry {index} requires a game version")
         if not banks:
-            raise Reverse1999CatalogError(
-                f"NPC entry {index} requires at least one bank"
-            )
+            raise Reverse1999CatalogError(f"NPC entry {index} requires at least one bank")
         if not isinstance(references, list):
-            raise Reverse1999CatalogError(
-                f"NPC entry {index} approved references must be a list"
-            )
+            raise Reverse1999CatalogError(f"NPC entry {index} approved references must be a list")
         approved_references = tuple(
             Reverse1999NpcCatalog._parse_reference(reference, index, banks)
             for reference in references
@@ -196,9 +184,7 @@ class Reverse1999NpcCatalog:
                 f"NPC entry {npc_index} reference bank is not in its bank list"
             )
         if not isinstance(media_id, int) or media_id <= 0:
-            raise Reverse1999CatalogError(
-                f"NPC entry {npc_index} reference requires a media ID"
-            )
+            raise Reverse1999CatalogError(f"NPC entry {npc_index} reference requires a media ID")
         for label, value in (
             ("source checksum", source_sha256),
             ("reference checksum", reference_sha256),
@@ -208,9 +194,7 @@ class Reverse1999NpcCatalog:
                     f"NPC entry {npc_index} reference has an invalid {label}"
                 )
         if not isinstance(reference, str) or not reference.strip():
-            raise Reverse1999CatalogError(
-                f"NPC entry {npc_index} reference requires a path"
-            )
+            raise Reverse1999CatalogError(f"NPC entry {npc_index} reference requires a path")
         return ApprovedReference(
             bank=bank,
             media_id=media_id,
@@ -282,7 +266,10 @@ def build_catalog_document(language, tables, bank_index, *, overlay=None, game_v
         for npc_id in npc_id_pattern.findall(filename):
             banks_by_id[npc_id].add(filename)
     for table, rows in tables.items():
-        if not (table.startswith("json_story_audio") or table in {"json_role_audio", "json_story_role_audio"}):
+        if not (
+            table.startswith("json_story_audio")
+            or table in {"json_role_audio", "json_story_role_audio"}
+        ):
             continue
         for row in rows:
             if not isinstance(row, list) or len(row) < 3:
@@ -314,7 +301,9 @@ def build_catalog_document(language, tables, bank_index, *, overlay=None, game_v
         for reference in references if isinstance(references, list) else ():
             if isinstance(reference, dict) and isinstance(reference.get("bank"), str):
                 banks.add(reference["bank"].strip())
-        display_name = str(override.get("display_name") or names.get(npc_id) or f"NPC {npc_id}").strip()
+        display_name = str(
+            override.get("display_name") or names.get(npc_id) or f"NPC {npc_id}"
+        ).strip()
         if not banks:
             continue
         npcs.append(

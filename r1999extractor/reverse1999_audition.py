@@ -11,9 +11,7 @@ from r1999extractor.reverse1999_index import default_output as default_bank_inde
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.wwise import convert_audio, read_embedded_media
 
-default_mapping_path = (
-    get_local_data_directory() / "reverse1999" / "speaker-mappings.json"
-)
+default_mapping_path = get_local_data_directory() / "reverse1999" / "speaker-mappings.json"
 default_audition_cache = get_local_data_directory() / "reverse1999" / "audition"
 
 
@@ -72,9 +70,7 @@ def filter_dialogue(dialogue, *, query="", chapter=None, speaker_id=None):
 def _media_ids(entry):
     media = set()
     for event in entry.get("events", []):
-        media.update(
-            value for value in event.get("media_ids", []) if isinstance(value, int)
-        )
+        media.update(value for value in event.get("media_ids", []) if isinstance(value, int))
     return tuple(sorted(media))
 
 
@@ -127,13 +123,9 @@ def prepare_audition_clip(
     output = cache_directory / bank.stem / f"{media_id}.wav"
     if output.is_file():
         return output
-    selected = next(
-        (item for item in read_embedded_media(bank) if item.media_id == media_id), None
-    )
+    selected = next((item for item in read_embedded_media(bank) if item.media_id == media_id), None)
     if selected is None:
-        raise Reverse1999AuditionError(
-            f"Media {media_id} does not exist in {bank.name}"
-        )
+        raise Reverse1999AuditionError(f"Media {media_id} does not exist in {bank.name}")
     output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="r1999-audition-") as temporary_directory:
         source = Path(temporary_directory) / f"{media_id}.wem"
@@ -154,9 +146,7 @@ def save_speaker_mapping(
     npc_id = str(npc_id).strip()
     bank = str(bank).strip()
     if not display_name or not npc_id or not bank:
-        raise Reverse1999AuditionError(
-            "A speaker name, NPC ID, and voice bank are required"
-        )
+        raise Reverse1999AuditionError("A speaker name, NPC ID, and voice bank are required")
     path = Path(path).expanduser().resolve()
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -169,9 +159,7 @@ def save_speaker_mapping(
         raise Reverse1999AuditionError("Speaker mapping file has an unsupported format")
     normalized = display_name.casefold()
     mappings[:] = [
-        item
-        for item in mappings
-        if str(item.get("display_name", "")).casefold() != normalized
+        item for item in mappings if str(item.get("display_name", "")).casefold() != normalized
     ]
     mappings.append(
         {
@@ -186,9 +174,7 @@ def save_speaker_mapping(
     return path
 
 
-def load_audition_data(
-    dialogue_index=default_dialogue_index, bank_index=default_bank_index
-):
+def load_audition_data(dialogue_index=default_dialogue_index, bank_index=default_bank_index):
     return (
         load_index(dialogue_index, "Dialogue index"),
         load_index(bank_index, "Bank index"),
@@ -211,9 +197,7 @@ def load_speaker_mappings(path=default_mapping_path):
 
 def voice_coverage(dialogue_index, mappings=()):
     mapped_ids = {str(item.get("npc_id", "")) for item in mappings}
-    mapped_names = {
-        str(item.get("display_name", "")).strip().casefold() for item in mappings
-    }
+    mapped_names = {str(item.get("display_name", "")).strip().casefold() for item in mappings}
     speakers = {}
     for row in dialogue_index.get("dialogue", []):
         speaker_id = str(row.get("speaker_id", "")).strip()

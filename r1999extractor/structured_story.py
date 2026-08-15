@@ -40,9 +40,7 @@ structured_source_specs = (
         speaker_id_index=5,
         speaker_name_index=3,
     ),
-    StructuredSourceSpec(
-        "json_activity206_dialogue", 5, speaker_id_index=2, speaker_name_index=3
-    ),
+    StructuredSourceSpec("json_activity206_dialogue", 5, speaker_id_index=2, speaker_name_index=3),
     StructuredSourceSpec("json_activity231_talk", 2, group_index=1, sequence_index=0),
     StructuredSourceSpec("json_arcade_talk_step", 2),
     StructuredSourceSpec("json_battle_dialog", 8, speaker_id_index=6, default_kind="dialogue"),
@@ -75,14 +73,10 @@ structured_source_specs = (
     StructuredSourceSpec("json_guide_step", 9, speaker_id_index=6, default_kind="dialogue"),
     StructuredSourceSpec("json_hero_story_dispatch_talk", 2),
     StructuredSourceSpec("json_mail", 4, sequence_index=0, speaker_name_index=2),
-    StructuredSourceSpec(
-        "json_odyssey_dialog_element", 6, type_index=2, speaker_name_index=5
-    ),
+    StructuredSourceSpec("json_odyssey_dialog_element", 6, type_index=2, speaker_name_index=5),
     StructuredSourceSpec("json_rogue_dialog", 2),
     StructuredSourceSpec("json_room_character_dialog", 3),
-    StructuredSourceSpec(
-        "json_room_character_dialog_select", 2, group_index=1, sequence_index=0
-    ),
+    StructuredSourceSpec("json_room_character_dialog_select", 2, group_index=1, sequence_index=0),
     StructuredSourceSpec("json_rouge_piece_talk", 2, sequence_index=0),
     StructuredSourceSpec("json_rouge_talk", 1, sequence_index=0),
     StructuredSourceSpec(
@@ -108,9 +102,7 @@ structured_source_specs = (
         allowed_types=("dialog", "aside", "location"),
         speaker_name_index=6,
     ),
-    StructuredSourceSpec(
-        "json_tower_v3a7_story", 3, speaker_id_index=2, default_kind="dialogue"
-    ),
+    StructuredSourceSpec("json_tower_v3a7_story", 3, speaker_id_index=2, default_kind="dialogue"),
 )
 
 
@@ -219,7 +211,9 @@ def extract_structured_story_lines(
                     filter_reason=filter_reason,
                     audio_status="unchecked" if voice_spec else "no_audio",
                     audio_reason=(
-                        "structured_source_voice_cue" if voice_spec else "structured_text_has_no_voice_cue"
+                        "structured_source_voice_cue"
+                        if voice_spec
+                        else "structured_text_has_no_voice_cue"
                     ),
                     source_kind="structured_dialogue",
                     story_group=f"{spec.table}:{group}",

@@ -39,9 +39,7 @@ class StructuredStoryTest(unittest.TestCase):
         character = ["1001", "speaker"] + [""] * 23
         tables = {
             "json_character": [character],
-            "json_room_character_interaction": [
-                [1, "1001"] + [0] * 14 + ["7001"]
-            ],
+            "json_room_character_interaction": [[1, "1001"] + [0] * 14 + ["7001"]],
             "json_room_character_dialog": [["7001", 1, "", "line"]],
         }
         specs = (StructuredSourceSpec("json_room_character_dialog", 3),)

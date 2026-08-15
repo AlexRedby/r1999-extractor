@@ -4,9 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-module_path = (
-    Path(__file__).resolve().parents[1] / "examples" / "provision_reverse1999_voices.py"
-)
+module_path = Path(__file__).resolve().parents[1] / "examples" / "provision_reverse1999_voices.py"
 module_spec = importlib.util.spec_from_file_location(
     "r1999_provisioner",
     module_path,
@@ -66,15 +64,11 @@ class Reverse1999VoiceProvisioningTest(unittest.TestCase):
         }
         with TemporaryDirectory() as temporary_directory:
             with (
-                patch.object(
-                    provisioner, "voice_line_images", return_value=["brimley.ogg"]
-                ),
+                patch.object(provisioner, "voice_line_images", return_value=["brimley.ogg"]),
                 patch.object(provisioner, "resolve_media", return_value=media),
                 patch.object(provisioner, "download"),
             ):
-                voice = provisioner.provision_character(
-                    "Brimley", Path(temporary_directory), 1
-                )
+                voice = provisioner.provision_character("Brimley", Path(temporary_directory), 1)
 
         self.assertEqual(voice["aliases"], ["Slouch Hat"])
 

@@ -86,9 +86,7 @@ def benchmark_models(queue_path, output_directory, providers, *, sample_size=24,
                 "generated_count": len(qualities),
                 "failed_count": result["failed"],
                 "technical_success_rate": round(len(qualities) / len(sample), 4),
-                "average_peak": round(
-                    sum(item["peak"] for item in qualities) / len(qualities), 6
-                )
+                "average_peak": round(sum(item["peak"] for item in qualities) / len(qualities), 6)
                 if qualities
                 else None,
                 "average_duration_seconds": round(

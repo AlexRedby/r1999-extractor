@@ -120,10 +120,7 @@ def _parse_event_action_ids(payload, bank_version):
     end = offset + count * 4
     if end > len(payload):
         raise WwiseBankError("Wwise event action list is truncated")
-    return tuple(
-        struct.unpack_from("<I", payload, offset + index * 4)[0]
-        for index in range(count)
-    )
+    return tuple(struct.unpack_from("<I", payload, offset + index * 4)[0] for index in range(count))
 
 
 def _parse_action(action, bank_version):
@@ -228,9 +225,7 @@ def parse_hirc_event_routes(payload, bank_version):
         for item in objects
         if item.object_type == 0x03
     }
-    sound_objects = {
-        item.object_id: item for item in objects if item.object_type == 0x02
-    }
+    sound_objects = {item.object_id: item for item in objects if item.object_type == 0x02}
     sounds = {
         sound_id: _parse_sound_media_id(item, bank_version)
         for sound_id, item in sound_objects.items()
@@ -258,10 +253,7 @@ def parse_hirc_event_routes(payload, bank_version):
         sound_ids = tuple(
             sound_id
             for sound_id in sounds
-            if any(
-                _is_descendant_of(sound_id, target_id, parent_ids)
-                for target_id in targets
-            )
+            if any(_is_descendant_of(sound_id, target_id, parent_ids) for target_id in targets)
         )
         media_ids = tuple(dict.fromkeys(sounds[sound_id] for sound_id in sound_ids))
         routes.append(
@@ -373,9 +365,7 @@ def extract_embedded_media(bank_data):
 
     media = []
     for offset in range(didx_offset + 8, didx_offset + 8 + didx_size, 12):
-        media_id, relative_offset, media_size = struct.unpack_from(
-            "<III", bank_data, offset
-        )
+        media_id, relative_offset, media_size = struct.unpack_from("<III", bank_data, offset)
         media_start = data_start + relative_offset
         media_end = media_start + media_size
         if media_start < data_start or media_end > data_end:
@@ -404,9 +394,7 @@ def extract_bank(bank, output_directory, *, limit=None, overwrite=False):
     for item in media:
         output = output_directory / f"{item.media_id}.wem"
         if output.exists() and not overwrite:
-            raise WwiseBankError(
-                f"Output already exists: {output}; pass --overwrite to replace it"
-            )
+            raise WwiseBankError(f"Output already exists: {output}; pass --overwrite to replace it")
         output.write_bytes(item.data)
         outputs.append(output)
     return outputs
@@ -450,8 +438,7 @@ def convert_audio(
     )
     if result.returncode:
         raise AudioConversionError(
-            f"Unable to convert {source.name}: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
+            f"Unable to convert {source.name}: {result.stderr.strip() or result.stdout.strip()}"
         )
     if not output.is_file():
         raise AudioConversionError(f"Decoder did not create output: {output}")

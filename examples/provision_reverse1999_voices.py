@@ -118,9 +118,7 @@ def category_members(category):
         if continuation:
             parameters["cmcontinue"] = continuation
         response = api_request(**parameters)
-        members.extend(
-            member["title"] for member in response["query"]["categorymembers"]
-        )
+        members.extend(member["title"] for member in response["query"]["categorymembers"])
         continuation = response.get("continue", {}).get("cmcontinue")
         if continuation is None:
             return members
@@ -147,8 +145,7 @@ def voice_line_images(character):
     return [
         image
         for image in response["parse"].get("images", [])
-        if image.casefold().endswith((".ogg", ".wav"))
-        and "garment" not in image.casefold()
+        if image.casefold().endswith((".ogg", ".wav")) and "garment" not in image.casefold()
     ]
 
 
@@ -210,9 +207,7 @@ def provision_character(character, references_directory, reference_count):
                 )
                 continue
             extension = Path(reference_image).suffix.casefold()
-            reference_path = references_directory / (
-                f"{slug}-{len(references) + 1:02d}{extension}"
-            )
+            reference_path = references_directory / (f"{slug}-{len(references) + 1:02d}{extension}")
             download(media["url"], reference_path)
             references.append(f"references/{reference_path.name}")
             sources.append(media["descriptionurl"])
@@ -258,8 +253,7 @@ def main():
     existing_manifest = read_json(manifest_path, {})
     can_resume = (
         existing_manifest.get("version") == 2
-        and existing_manifest.get("reference_count", arguments.references)
-        == arguments.references
+        and existing_manifest.get("reference_count", arguments.references) == arguments.references
     )
     voices = existing_manifest.get("voices", []) if can_resume else []
     for voice in voices:
@@ -297,8 +291,7 @@ def main():
 
     with ThreadPoolExecutor(max_workers=arguments.workers) as executor:
         future_characters = {
-            executor.submit(provision, character): character
-            for character in pending_characters
+            executor.submit(provision, character): character for character in pending_characters
         }
         for future in as_completed(future_characters):
             character = future_characters[future]
@@ -313,9 +306,7 @@ def main():
             completed_characters.add(character)
             voices.sort(key=lambda entry: entry["character"].casefold())
             skipped.sort(key=lambda entry: entry["character"].casefold())
-            print(
-                f"[{len(completed_characters)}/{len(characters)}] {character}: {result}"
-            )
+            print(f"[{len(completed_characters)}/{len(characters)}] {character}: {result}")
             atomic_write_json(
                 manifest_path,
                 {

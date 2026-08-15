@@ -60,9 +60,7 @@ def inspect_generated_wav(path):
         raise BulkGenerationError("Generated WAV is effectively silent")
     if peak >= 1.0:
         raise BulkGenerationError("Generated WAV is clipped")
-    return AudioQuality(
-        round(duration, 4), info.sample_rate, 1, info.sample_count, round(peak, 6)
-    )
+    return AudioQuality(round(duration, 4), info.sample_rate, 1, info.sample_count, round(peak, 6))
 
 
 class CommandProvider:
@@ -111,7 +109,10 @@ def load_generation_queue(path):
             items = [json.loads(row) for row in stream]
     except (OSError, StopIteration, json.JSONDecodeError) as error:
         raise BulkGenerationError(f"Unable to read generation queue {path}: {error}") from error
-    if metadata.get("schema") != "vntts.voice-generation-queue" or metadata.get("schema_version") != 1:
+    if (
+        metadata.get("schema") != "vntts.voice-generation-queue"
+        or metadata.get("schema_version") != 1
+    ):
         raise BulkGenerationError("Unsupported voice generation queue")
     if metadata.get("item_count") != len(items):
         raise BulkGenerationError("Generation queue count does not match metadata")
@@ -168,8 +169,10 @@ def run_bulk_generation(
             continue
         prompt = item.get("prompt_adapters", {}).get("generic", "")
         prompt_sha256 = hashlib.sha256(str(prompt).encode("utf-8")).hexdigest()
-        relative = Path("audio") / slugify(item["voice_character"]) / (
-            hashlib.sha256(queue_id.encode("utf-8")).hexdigest()[:24] + ".wav"
+        relative = (
+            Path("audio")
+            / slugify(item["voice_character"])
+            / (hashlib.sha256(queue_id.encode("utf-8")).hexdigest()[:24] + ".wav")
         )
         destination = output_directory / relative
         destination.parent.mkdir(parents=True, exist_ok=True)

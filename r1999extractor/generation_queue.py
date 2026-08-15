@@ -101,28 +101,28 @@ def build_generation_queue(records):
             record.get("voice_character") or record.get("speaker") or "Narrator"
         ).strip()
         item = {
-                "record_type": "generation_item",
-                "queue_id": f"{line_id}:{text_hash[:16]}",
-                "line_id": line_id,
-                "text_sha256": text_hash,
-                "speaker": _required_text(record, "speaker"),
-                "voice_character": voice_character,
-                "text": text,
-                "kind": str(record.get("kind") or "dialogue"),
-                "previous_text": record.get("previous_text"),
-                "next_text": record.get("next_text"),
-                "source_kind": str(record.get("source_kind") or "story"),
-                "story_group": record.get("story_group"),
-                "story_title": record.get("story_title"),
-                "episode_title": record.get("episode_title"),
-                "chapter": str(record.get("chapter") or ""),
-                "sequence": int(record.get("sequence", 0)),
-                "story_order": record.get("story_order"),
-                "source_audio_status": audio_status,
-                "source_audio_reason": str(record.get("audio_reason") or "not_resolved"),
-                "action": generation_action(audio_status),
-                "state": "pending",
-            }
+            "record_type": "generation_item",
+            "queue_id": f"{line_id}:{text_hash[:16]}",
+            "line_id": line_id,
+            "text_sha256": text_hash,
+            "speaker": _required_text(record, "speaker"),
+            "voice_character": voice_character,
+            "text": text,
+            "kind": str(record.get("kind") or "dialogue"),
+            "previous_text": record.get("previous_text"),
+            "next_text": record.get("next_text"),
+            "source_kind": str(record.get("source_kind") or "story"),
+            "story_group": record.get("story_group"),
+            "story_title": record.get("story_title"),
+            "episode_title": record.get("episode_title"),
+            "chapter": str(record.get("chapter") or ""),
+            "sequence": int(record.get("sequence", 0)),
+            "story_order": record.get("story_order"),
+            "source_audio_status": audio_status,
+            "source_audio_reason": str(record.get("audio_reason") or "not_resolved"),
+            "action": generation_action(audio_status),
+            "state": "pending",
+        }
         item.update(
             annotate_delivery(
                 text,
@@ -165,9 +165,7 @@ def write_generation_queue(queue, story_index, output=default_output):
             sorted(Counter(item["source_audio_status"] for item in queue).items())
         ),
         "action_counts": dict(sorted(Counter(item["action"] for item in queue).items())),
-        "source_kind_counts": dict(
-            sorted(Counter(item["source_kind"] for item in queue).items())
-        ),
+        "source_kind_counts": dict(sorted(Counter(item["source_kind"] for item in queue).items())),
         "delivery_annotation_version": delivery_annotation_version,
     }
     with atomic_output_path(output) as temporary:

@@ -70,9 +70,9 @@ class Reverse1999NpcCatalogTest(unittest.TestCase):
             reference = references / "kamuta.wav"
             reference.write_bytes(b"voice")
             document = catalog_document()
-            document["npcs"][0]["approved_references"][0]["reference_sha256"] = (
-                hashlib.sha256(b"voice").hexdigest()
-            )
+            document["npcs"][0]["approved_references"][0]["reference_sha256"] = hashlib.sha256(
+                b"voice"
+            ).hexdigest()
             catalog_path = root / "catalog.json"
             catalog_path.write_text(json.dumps(document), encoding="utf-8")
 
@@ -124,9 +124,9 @@ class Reverse1999NpcCatalogTest(unittest.TestCase):
             reference = references / "kamuta.wav"
             reference.write_bytes(b"voice")
             document = catalog_document()
-            document["npcs"][0]["approved_references"][0]["reference_sha256"] = (
-                hashlib.sha256(b"voice").hexdigest()
-            )
+            document["npcs"][0]["approved_references"][0]["reference_sha256"] = hashlib.sha256(
+                b"voice"
+            ).hexdigest()
             catalog_path = root / "catalog.json"
             catalog_path.write_text(json.dumps(document), encoding="utf-8")
             output = StringIO()

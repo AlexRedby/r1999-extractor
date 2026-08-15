@@ -29,10 +29,7 @@ class VersionedJSONCodec:
     def validate(self, document):
         if not isinstance(document, dict):
             raise VersionedJSONError(f"{self.description} must be a JSON object")
-        if (
-            document.get("schema") != self.schema
-            or document.get("schema_version") != self.version
-        ):
+        if document.get("schema") != self.schema or document.get("schema_version") != self.version:
             raise VersionedJSONError(f"Unsupported {self.description} schema")
         return document
 

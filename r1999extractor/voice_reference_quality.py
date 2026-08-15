@@ -66,9 +66,7 @@ def _decode_pcm(raw, sample_width):
         return decoded.astype(np.float32) / 8388608.0
     if sample_width == 4:
         return np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
-    raise VoiceReferenceQualityError(
-        f"Unsupported PCM sample width: {sample_width} bytes"
-    )
+    raise VoiceReferenceQualityError(f"Unsupported PCM sample width: {sample_width} bytes")
 
 
 def read_pcm_wav(path):
@@ -81,9 +79,7 @@ def read_pcm_wav(path):
             compression = audio.getcomptype()
             raw = audio.readframes(audio.getnframes())
     except (OSError, wave.Error) as error:
-        raise VoiceReferenceQualityError(
-            f"Unable to read WAV {path}: {error}"
-        ) from error
+        raise VoiceReferenceQualityError(f"Unable to read WAV {path}: {error}") from error
     if compression != "NONE":
         raise VoiceReferenceQualityError(f"WAV must contain uncompressed PCM: {path}")
     if channels <= 0 or sample_rate <= 0:
@@ -187,9 +183,7 @@ def trim_and_normalize_voice_reference(
     active = _frame_rms(samples, frame_size) > 10 ** (silence_dbfs / 20.0)
     active_frames = np.flatnonzero(active)
     if not len(active_frames):
-        raise VoiceReferenceQualityError(
-            f"WAV contains no speech-level audio: {source}"
-        )
+        raise VoiceReferenceQualityError(f"WAV contains no speech-level audio: {source}")
     padding = round(sample_rate * padding_ms / 1000)
     start = max(0, int(active_frames[0]) * frame_size - padding)
     end = min(len(samples), (int(active_frames[-1]) + 1) * frame_size + padding)

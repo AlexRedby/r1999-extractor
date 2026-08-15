@@ -50,9 +50,7 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
                 patch.object(
                     importer,
                     "convert_audio",
-                    side_effect=lambda _source, destination, **_options: write_wav(
-                        destination
-                    ),
+                    side_effect=lambda _source, destination, **_options: write_wav(destination),
                 ),
             ):
                 references = importer.decode_references(
@@ -123,9 +121,7 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
                 patch.object(
                     importer,
                     "convert_audio",
-                    side_effect=lambda _source, destination, **_options: write_wav(
-                        destination
-                    ),
+                    side_effect=lambda _source, destination, **_options: write_wav(destination),
                 ),
             ):
                 references = importer.decode_references(
@@ -165,9 +161,7 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
             bank = directory / "activityvoc_story_npc505701_feichi.bnk"
             bank.write_bytes(b"bank")
 
-            with self.assertRaisesRegex(
-                importer.GameVoiceImportError, "Scene-audio bank"
-            ):
+            with self.assertRaisesRegex(importer.GameVoiceImportError, "Scene-audio bank"):
                 importer.decode_references(
                     bank,
                     directory / "pack",
@@ -258,9 +252,7 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
             path = references / "brimley-game-01.wav"
             path.write_bytes(b"voice")
 
-            manifest_path = importer.update_manifest(
-                output, "Brimley", [path], Path("brimley.bnk")
-            )
+            manifest_path = importer.update_manifest(output, "Brimley", [path], Path("brimley.bnk"))
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual(manifest["voices"][0]["aliases"], ["Slouch Hat"])

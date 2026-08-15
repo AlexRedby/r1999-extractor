@@ -223,9 +223,7 @@ class Reverse1999BatchTest(unittest.TestCase):
             [(item["npc_id"], item["speaker_name"]) for item in state["mappings"]],
             [("100", "Safe")],
         )
-        reasons = {
-            item["npc_id"]: item["reasons"] for item in state["mapping_review_queue"]
-        }
+        reasons = {item["npc_id"]: item["reasons"] for item in state["mapping_review_queue"]}
         self.assertIn("conflicting-speaker-names", reasons["200"])
         self.assertIn("speaker-name-shared-by-multiple-ids", reasons["300"])
         self.assertIn("speaker-name-shared-by-multiple-ids", reasons["400"])
@@ -430,10 +428,7 @@ class Reverse1999BatchTest(unittest.TestCase):
 
         self.assertEqual(state["auto_selections"], [])
         self.assertTrue(
-            all(
-                clip["identity_flags"] == ["dialogue-speaker-mismatch"]
-                for clip in state["clips"]
-            )
+            all(clip["identity_flags"] == ["dialogue-speaker-mismatch"] for clip in state["clips"])
         )
 
     def test_speaker_embeddings_keep_only_one_consistent_cluster(self):
@@ -524,10 +519,7 @@ class Reverse1999BatchTest(unittest.TestCase):
 
         self.assertEqual(state["auto_selections"], [])
         self.assertTrue(
-            all(
-                clip["identity_flags"] == ["known-speaker-mismatch"]
-                for clip in state["clips"]
-            )
+            all(clip["identity_flags"] == ["known-speaker-mismatch"] for clip in state["clips"])
         )
 
     def test_pending_auto_review_is_ignored_until_content_flags_are_set(self):
@@ -544,9 +536,7 @@ class Reverse1999BatchTest(unittest.TestCase):
                 "matches_expected_speaker": None,
                 "metrics": {"technical_flags": []},
             }
-            path.write_text(
-                json.dumps({"version": 1, "clips": [review]}), encoding="utf-8"
-            )
+            path.write_text(json.dumps({"version": 1, "clips": [review]}), encoding="utf-8")
             state = new_state()
             state["clips"] = [
                 {
@@ -562,9 +552,7 @@ class Reverse1999BatchTest(unittest.TestCase):
             review["music_or_sfx"] = False
             review["multiple_speakers"] = False
             review["matches_expected_speaker"] = True
-            path.write_text(
-                json.dumps({"version": 1, "clips": [review]}), encoding="utf-8"
-            )
+            path.write_text(json.dumps({"version": 1, "clips": [review]}), encoding="utf-8")
             merge_clip_reviews(state, review_path=path)
 
         self.assertEqual(state["clips"][0]["status"], "approved")
@@ -592,9 +580,7 @@ class Reverse1999BatchTest(unittest.TestCase):
                 encoding="utf-8",
             )
             state = new_state()
-            state["clips"] = [
-                {"bank": "scene.bnk", "media_id": 1, "status": "scored"}
-            ]
+            state["clips"] = [{"bank": "scene.bnk", "media_id": 1, "status": "scored"}]
 
             merge_clip_reviews(state, review_path=path)
 
@@ -677,9 +663,7 @@ class Reverse1999BatchTest(unittest.TestCase):
                 }
             ]
 
-            with self.assertRaisesRegex(
-                Reverse1999BatchError, "checksum does not match"
-            ):
+            with self.assertRaisesRegex(Reverse1999BatchError, "checksum does not match"):
                 update_catalog_from_imports(
                     state,
                     catalog_path=catalog_path,

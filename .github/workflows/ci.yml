@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install locked core and development dependencies
+        run: uv sync --group dev --frozen
+
+      - name: Check formatting
+        run: uv run --frozen ruff format --check .
+
+      - name: Lint
+        run: uv run --frozen ruff check .
+
+      - name: Run core tests
+        run: uv run --frozen python -m unittest discover -s tests
+
+      - name: Verify repository boundary
+        run: uv run --frozen r1999-repository-guard
+
+  ui:
+    needs: core
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install Qt runtime libraries
+        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
+
+      - name: Install locked UI dependencies
+        run: uv sync --extra ui --frozen
+
+      - name: Run Qt audition tests
+        run: >-
+          uv run --frozen --extra ui python -m unittest discover
+          -s tests -p 'test_reverse1999_audition.py'

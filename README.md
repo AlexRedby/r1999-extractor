@@ -30,11 +30,12 @@ generated audio.
 ## Setup
 
 ```bash
-python -m venv .venv
-.venv/bin/pip install -e '.[ui]'
+uv sync --group dev --extra ui
 ```
 
-On Windows, use `.venv\\Scripts\\python` and `.venv\\Scripts\\pip`.
+This creates a locked local environment with the optional Qt audition UI. For
+headless extraction and core tests only, omit `--extra ui`. Run project commands
+through `uv run`, for example `uv run r1999-bootstrap`.
 
 ## Extract all story text
 
@@ -172,5 +173,11 @@ Run `--help` on each command for paths and workflow options. The batch, catalog,
 ## Tests
 
 ```bash
-python -m unittest discover -s tests
+uv run ruff format --check .
+uv run ruff check .
+uv run python -m unittest discover -s tests
+uv run r1999-repository-guard
 ```
+
+Without the `ui` extra, the three Qt audition tests are skipped while all core
+tests still run. CI installs the extra and runs those UI tests in a separate job.

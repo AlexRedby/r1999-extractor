@@ -5,30 +5,45 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from r1999extractor.reverse1999_audition import (  # noqa: E402
+from r1999extractor.reverse1999_audition import (
     candidate_banks,
     chapter_tokens,
     filter_dialogue,
     save_speaker_mapping,
     voice_coverage,
 )
-from r1999extractor.reverse1999_audition_ui import Reverse1999AuditionDialog  # noqa: E402
-from r1999extractor.voice_reference_quality import VoiceReferenceMetrics  # noqa: E402
+from r1999extractor.voice_reference_quality import VoiceReferenceMetrics
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    from PySide6.QtWidgets import QApplication  # noqa: E402
+
+    from r1999extractor.reverse1999_audition_ui import (  # noqa: E402
+        Reverse1999AuditionDialog,
+    )
+except ModuleNotFoundError as error:
+    if error.name != "PySide6":
+        raise
+    QApplication = None
+    Reverse1999AuditionDialog = None
+
+
+ui_unavailable = QApplication is None
 
 
 class Reverse1999AuditionTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.application = QApplication.instance() or QApplication([])
+        cls.application = None if ui_unavailable else QApplication.instance() or QApplication([])
 
     def setUp(self):
-        self.application.processEvents()
+        if self.application is not None:
+            self.application.processEvents()
 
     def tearDown(self):
+        if self.application is None:
+            return
         for widget in self.application.topLevelWidgets():
             if isinstance(widget, Reverse1999AuditionDialog):
                 widget.close()
@@ -113,6 +128,7 @@ class Reverse1999AuditionTest(unittest.TestCase):
         self.assertFalse(coverage[0]["mapped"])
         self.assertEqual(coverage[1]["dialogue_count"], 2)
 
+    @unittest.skipIf(ui_unavailable, "install the ui extra to run Qt tests")
     def test_dialog_selects_chapter_candidates_and_prefills_npc_id(self):
         dialogue_index = {
             "dialogue": [
@@ -140,9 +156,7 @@ class Reverse1999AuditionTest(unittest.TestCase):
         dialog.search.setText("Selone")
         dialog.speaker_name.setText("Selone")
         dialog.npc_id.setText("624901")
-        dialog.candidates = candidate_banks(
-            bank_index, chapter="24006", speaker_id="310918"
-        )
+        dialog.candidates = candidate_banks(bank_index, chapter="24006", speaker_id="310918")
         for candidate in dialog.candidates:
             dialog.banks.addItem(candidate.filename)
         dialog.banks.setCurrentRow(0)
@@ -153,6 +167,7 @@ class Reverse1999AuditionTest(unittest.TestCase):
         self.assertEqual(dialog.media.currentData(), 42)
         dialog.deleteLater()
 
+    @unittest.skipIf(ui_unavailable, "install the ui extra to run Qt tests")
     def test_dialog_records_reviewed_clip(self):
         dialogue_index = {
             "dialogue": [
@@ -200,9 +215,7 @@ class Reverse1999AuditionTest(unittest.TestCase):
         )
         dialog.speaker_name.setText("Selone")
         dialog.npc_id.setText("521001")
-        dialog.candidates = candidate_banks(
-            bank_index, chapter="24006", speaker_id="521001"
-        )
+        dialog.candidates = candidate_banks(bank_index, chapter="24006", speaker_id="521001")
         for candidate in dialog.candidates:
             dialog.banks.addItem(candidate.filename)
         dialog.banks.setCurrentRow(0)
@@ -221,6 +234,7 @@ class Reverse1999AuditionTest(unittest.TestCase):
         self.assertIn("approved", dialog.status.text())
         dialog.deleteLater()
 
+    @unittest.skipIf(ui_unavailable, "install the ui extra to run Qt tests")
     def test_approved_clip_can_be_imported_into_voice_manifest(self):
         dialogue_index = {
             "dialogue": [
@@ -271,8 +285,8 @@ class Reverse1999AuditionTest(unittest.TestCase):
                 ),
                 mapping_loader=lambda: (),
                 voice_output=Path(temporary_directory) / "voice-pack",
-                reference_processor=lambda input_path, output_path: (
-                    output_path.write_bytes(input_path.read_bytes())
+                reference_processor=lambda input_path, output_path: output_path.write_bytes(
+                    input_path.read_bytes()
                 ),
                 manifest_updater=lambda directory, character, references, bank: (
                     imported.append((directory, character, references, bank))
@@ -281,9 +295,7 @@ class Reverse1999AuditionTest(unittest.TestCase):
             )
             dialog.speaker_name.setText("Selone")
             dialog.npc_id.setText("520513")
-            dialog.candidates = candidate_banks(
-                bank_index, chapter="24006", speaker_id="520513"
-            )
+            dialog.candidates = candidate_banks(bank_index, chapter="24006", speaker_id="520513")
             for candidate in dialog.candidates:
                 dialog.banks.addItem(candidate.filename)
             dialog.banks.setCurrentRow(0)

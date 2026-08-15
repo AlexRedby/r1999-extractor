@@ -13,7 +13,9 @@ emotion_terms = {
 }
 
 
-def annotate_delivery(text, *, speaker="Narrator", previous_text=None, next_text=None, kind="dialogue"):
+def annotate_delivery(
+    text, *, speaker="Narrator", previous_text=None, next_text=None, kind="dialogue"
+):
     lowered = text.casefold()
     words = set(word_pattern.findall(lowered))
     scores = {emotion: len(words & terms) for emotion, terms in emotion_terms.items()}

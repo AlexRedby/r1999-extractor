@@ -86,9 +86,7 @@ class Reverse1999AuditionDialog(QDialog):
         self.search.setPlaceholderText("Speaker name, NPC ID, or dialogue text")
         self.chapter = QComboBox()
         self.chapter.addItem("All chapters", None)
-        chapters = sorted(
-            {str(row.get("chapter")) for row in dialogue_index.get("dialogue", [])}
-        )
+        chapters = sorted({str(row.get("chapter")) for row in dialogue_index.get("dialogue", [])})
         for chapter in chapters:
             self.chapter.addItem(chapter, chapter)
         self.search.textChanged.connect(self.refresh_dialogue)
@@ -248,9 +246,7 @@ class Reverse1999AuditionDialog(QDialog):
         if row.get("speaker_name"):
             self.speaker_name.setText(row["speaker_name"])
         self.npc_id.setText(str(speaker_id or ""))
-        self.candidates = candidate_banks(
-            self.bank_index, chapter=chapter, speaker_id=speaker_id
-        )
+        self.candidates = candidate_banks(self.bank_index, chapter=chapter, speaker_id=speaker_id)
         self.banks.clear()
         for candidate in self.candidates:
             npc = ", ".join(candidate.npc_ids) or "unknown NPC"
@@ -317,14 +313,8 @@ class Reverse1999AuditionDialog(QDialog):
         music_or_sfx = self.music_or_sfx.currentData()
         multiple_speakers = self.multiple_speakers.currentData()
         matches_expected_speaker = self.matches_expected_speaker.currentData()
-        if (
-            music_or_sfx is None
-            or multiple_speakers is None
-            or matches_expected_speaker is None
-        ):
-            self.status.setText(
-                "Review music/SFX, speaker count, and expected speaker first."
-            )
+        if music_or_sfx is None or multiple_speakers is None or matches_expected_speaker is None:
+            self.status.setText("Review music/SFX, speaker count, and expected speaker first.")
             return
         candidate, media_id, _output, metrics = self.current_clip
         selected = self.dialogue.selectedItems()
@@ -357,9 +347,7 @@ class Reverse1999AuditionDialog(QDialog):
             self.status.setText("Review and approve a clip before importing it.")
             return
         if not self.current_review.approved:
-            self.status.setText(
-                "Only an approved clean single-speaker clip can be imported."
-            )
+            self.status.setText("Only an approved clean single-speaker clip can be imported.")
             return
         character = self.speaker_name.text().strip()
         if not character:
@@ -367,9 +355,7 @@ class Reverse1999AuditionDialog(QDialog):
             return
         candidate, media_id, output, metrics = self.current_clip
         if Path(output).resolve() != Path(metrics.path).resolve():
-            self.status.setText(
-                "The reviewed clip no longer matches the selected audio."
-            )
+            self.status.setText("The reviewed clip no longer matches the selected audio.")
             return
         destination = (
             self.voice_output
@@ -396,9 +382,7 @@ class Reverse1999AuditionDialog(QDialog):
             self.status.setText(f"Unable to import voice: {error}")
             return
         self.voice_imported.emit(str(manifest))
-        self.status.setText(
-            f"Imported {character} into {manifest}. Restart speech to load it."
-        )
+        self.status.setText(f"Imported {character} into {manifest}. Restart speech to load it.")
 
     def save_mapping(self):
         candidate = self.selected_bank()

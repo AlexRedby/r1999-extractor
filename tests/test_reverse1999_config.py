@@ -47,12 +47,8 @@ class Reverse1999ConfigTest(unittest.TestCase):
             decrypt_config_data(b"x" * (config_header_size + 1))
 
     def test_parses_language_and_nested_data_tables(self):
-        language = parse_language_document(
-            ["language_en", [["name", "Fatutu"], ["line", "Hello"]]]
-        )
-        tables = parse_data_document(
-            {"json_tip_dialog": json.dumps(["json_tip_dialog", [[1, 2]]])}
-        )
+        language = parse_language_document(["language_en", [["name", "Fatutu"], ["line", "Hello"]]])
+        tables = parse_data_document({"json_tip_dialog": json.dumps(["json_tip_dialog", [[1, 2]]])})
 
         self.assertEqual(language, {"name": "Fatutu", "line": "Hello"})
         self.assertEqual(tables, {"json_tip_dialog": [[1, 2]]})
@@ -108,15 +104,11 @@ class Reverse1999ConfigTest(unittest.TestCase):
             "json_guide_step": [
                 [24401, 6, "talk", 0, 0, "235#236", "520301", 0, "", "kamuta_line"]
             ],
-            "json_dialog_step": [
-                [30, 30001, 1, "unknown_line", "selone_name", "521001", 1]
-            ],
+            "json_dialog_step": [[30, 30001, 1, "unknown_line", "selone_name", "521001", 1]],
         }
         language["selone_name"] = "Selone"
 
-        identities, evidence = extract_dialogue_evidence(
-            language, tables, catalog=catalog
-        )
+        identities, evidence = extract_dialogue_evidence(language, tables, catalog=catalog)
 
         self.assertEqual(identities["3109"].display_name, "Fatutu")
         self.assertEqual(

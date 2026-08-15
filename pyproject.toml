@@ -18,8 +18,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["PySide6>=6.6"]
-dev = ["ruff>=0.14"]
+ui = ["PySide6==6.10.1"]
+
+[dependency-groups]
+dev = ["ruff==0.16.2"]
 
 [project.scripts]
 r1999-story-index = "r1999extractor.story_index:main"

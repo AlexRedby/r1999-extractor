@@ -50,9 +50,7 @@ from r1999extractor.wwise import convert_audio, read_embedded_media, resolve_dec
 state_version = 1
 default_state_path = get_local_data_directory() / "reverse1999" / "batch-state.json"
 default_batch_cache = get_local_data_directory() / "reverse1999" / "batch"
-default_auto_review_path = (
-    get_local_data_directory() / "reverse1999" / "auto-review-queue.json"
-)
+default_auto_review_path = get_local_data_directory() / "reverse1999" / "auto-review-queue.json"
 
 
 class Reverse1999BatchError(RuntimeError):
@@ -169,9 +167,7 @@ def map_speakers(
             "source": "assisted",
         }
     installed_ids = set(bank_index.get("npc_banks", {}))
-    state["mappings"] = sorted(
-        mappings.values(), key=lambda item: item["speaker_name"].casefold()
-    )
+    state["mappings"] = sorted(mappings.values(), key=lambda item: item["speaker_name"].casefold())
     state["unresolved_npc_ids"] = sorted(installed_ids - set(mappings))
     return state
 
@@ -362,9 +358,7 @@ def extract_mapped_clips(
     entries = _bank_entries(bank_index)
     decoder = resolve_decoder(decoder)
     cache_directory = Path(cache_directory).expanduser().resolve()
-    existing = {
-        (clip["bank"], clip["media_id"]): clip for clip in state.get("clips", [])
-    }
+    existing = {(clip["bank"], clip["media_id"]): clip for clip in state.get("clips", [])}
     checkpoint = checkpoint or (lambda: None)
     for mapping in state.get("mappings", []):
         for configured_bank in mapping["banks"]:
@@ -403,13 +397,9 @@ def extract_mapped_clips(
                         existing[key] = clip
                         state["clips"] = list(existing.values())
             except Exception as error:
-                state["errors"].append(
-                    {"stage": "extract", "bank": str(bank), "error": str(error)}
-                )
+                state["errors"].append({"stage": "extract", "bank": str(bank), "error": str(error)})
             checkpoint()
-    state["clips"] = sorted(
-        existing.values(), key=lambda clip: (clip["bank"], clip["media_id"])
-    )
+    state["clips"] = sorted(existing.values(), key=lambda clip: (clip["bank"], clip["media_id"]))
     return state
 
 
@@ -433,9 +423,7 @@ def create_local_whisper_transcriber(model_path):
     """Create an offline-only Whisper transcriber from an existing local model."""
     model_path = Path(model_path).expanduser().resolve()
     if not model_path.is_dir():
-        raise Reverse1999BatchError(
-            f"Local Whisper model directory does not exist: {model_path}"
-        )
+        raise Reverse1999BatchError(f"Local Whisper model directory does not exist: {model_path}")
     try:
         from transformers import (
             WhisperForConditionalGeneration,
@@ -443,9 +431,7 @@ def create_local_whisper_transcriber(model_path):
             pipeline,
         )
 
-        model = WhisperForConditionalGeneration.from_pretrained(
-            model_path, local_files_only=True
-        )
+        model = WhisperForConditionalGeneration.from_pretrained(model_path, local_files_only=True)
         processor = WhisperProcessor.from_pretrained(model_path, local_files_only=True)
         recognizer = pipeline(
             "automatic-speech-recognition",
@@ -471,16 +457,12 @@ def create_local_speaker_embedder(model_path):
     """Create an offline WavLM x-vector embedder from an existing local model."""
     model_path = Path(model_path).expanduser().resolve()
     if not model_path.is_dir():
-        raise Reverse1999BatchError(
-            f"Local speaker model directory does not exist: {model_path}"
-        )
+        raise Reverse1999BatchError(f"Local speaker model directory does not exist: {model_path}")
     try:
         import torch
         from transformers import AutoFeatureExtractor, WavLMForXVector
 
-        extractor = AutoFeatureExtractor.from_pretrained(
-            model_path, local_files_only=True
-        )
+        extractor = AutoFeatureExtractor.from_pretrained(model_path, local_files_only=True)
         model = WavLMForXVector.from_pretrained(model_path, local_files_only=True)
         model.eval()
     except Exception as error:
@@ -498,9 +480,7 @@ def create_local_speaker_embedder(model_path):
             new_length = max(1, round(duration * target_rate))
             new_points = np.linspace(0.0, duration, new_length, endpoint=False)
             samples = np.interp(new_points, old_points, samples).astype(np.float32)
-        inputs = extractor(
-            samples, sampling_rate=target_rate, return_tensors="pt", padding=True
-        )
+        inputs = extractor(samples, sampling_rate=target_rate, return_tensors="pt", padding=True)
         with torch.inference_mode():
             embedding = model(**inputs).embeddings[0].detach().cpu().numpy()
         norm = float(np.linalg.norm(embedding))
@@ -518,10 +498,7 @@ def _transcript_flags(transcript):
     if len(words) < 3:
         flags.append("transcript-too-short")
     folded = transcript.casefold()
-    if any(
-        marker in folded
-        for marker in ("[music]", "[noise]", "[applause]", "[laughter]")
-    ):
+    if any(marker in folded for marker in ("[music]", "[noise]", "[applause]", "[laughter]")):
         flags.append("transcript-non-speech-marker")
     if len(words) >= 6 and len({word.casefold() for word in words}) <= 2:
         flags.append("transcript-repetitive")
@@ -548,9 +525,7 @@ def _dialogue_identity(transcript, expected_lines, other_lines):
     expected_score = max(
         (_text_similarity(transcript, line) for line in expected_lines), default=0.0
     )
-    other_score = max(
-        (_text_similarity(transcript, line) for line in other_lines), default=0.0
-    )
+    other_score = max((_text_similarity(transcript, line) for line in other_lines), default=0.0)
     matches = expected_score >= 0.58 and expected_score >= other_score + 0.05
     return {
         "matches_expected_speaker": matches,
@@ -590,9 +565,7 @@ def _catalog_speaker_anchors(catalog_path, reference_root, speaker_embedder):
         for reference in npc.approved_references:
             path = reference_root / reference.reference
             if path.is_file():
-                embeddings.append(
-                    np.asarray(speaker_embedder(path), dtype=np.float32)
-                )
+                embeddings.append(np.asarray(speaker_embedder(path), dtype=np.float32))
         if not embeddings:
             continue
         centroid = np.mean(embeddings, axis=0)
@@ -645,9 +618,7 @@ def _write_auto_review_queue(selections, output):
                 "transcript": clip.get("transcript"),
                 "dialogue_identity": clip.get("dialogue_identity"),
                 "speaker_similarity": clip.get("speaker_similarity"),
-                "speaker_anchor_similarity": clip.get(
-                    "speaker_anchor_similarity"
-                ),
+                "speaker_anchor_similarity": clip.get("speaker_anchor_similarity"),
                 "music_or_sfx": None,
                 "multiple_speakers": None,
                 "matches_expected_speaker": None,
@@ -733,9 +704,7 @@ def preselect_auto_references(
                 continue
             if transcriber is not None:
                 expected_lines = dialogue_by_speaker.get(npc_id, [])
-                other_lines = [
-                    text for owner, text in all_dialogue if owner != npc_id
-                ]
+                other_lines = [text for owner, text in all_dialogue if owner != npc_id]
                 clip["dialogue_identity"] = _dialogue_identity(
                     clip.get("transcript", ""), expected_lines, other_lines
                 )
@@ -776,12 +745,8 @@ def preselect_auto_references(
                 }
                 for clip, _review, embedding in eligible
             ]
-            consistent, minimum_similarity = _largest_consistent_cluster(
-                embedding_clips
-            )
-            consistent_keys = {
-                (clip["bank"], clip["media_id"]) for clip in consistent
-            }
+            consistent, minimum_similarity = _largest_consistent_cluster(embedding_clips)
+            consistent_keys = {(clip["bank"], clip["media_id"]) for clip in consistent}
             for clip, _review, _embedding in eligible:
                 if (clip["bank"], clip["media_id"]) in consistent_keys:
                     clip["speaker_similarity"] = round(minimum_similarity, 4)
@@ -798,9 +763,7 @@ def preselect_auto_references(
             mapping["speaker_name"],
             maximum_clips=3,
         )
-        selected_keys = {
-            (review["bank"], review["media_id"]) for review in selected_reviews
-        }
+        selected_keys = {(review["bank"], review["media_id"]) for review in selected_reviews}
         selected = [
             clip
             for clip, _review, _embedding in eligible
@@ -826,11 +789,7 @@ def preselect_auto_references(
                 "banks": sorted({clip["bank"] for clip in selected}),
                 "clips": [
                     {key: clip[key] for key in ("bank", "media_id", "wav", "metrics")}
-                    | (
-                        {"transcript": clip["transcript"]}
-                        if "transcript" in clip
-                        else {}
-                    )
+                    | ({"transcript": clip["transcript"]} if "transcript" in clip else {})
                     | (
                         {"dialogue_identity": clip["dialogue_identity"]}
                         if "dialogue_identity" in clip
@@ -842,11 +801,7 @@ def preselect_auto_references(
                         else {}
                     )
                     | (
-                        {
-                            "speaker_anchor_similarity": clip[
-                                "speaker_anchor_similarity"
-                            ]
-                        }
+                        {"speaker_anchor_similarity": clip["speaker_anchor_similarity"]}
                         if "speaker_anchor_similarity" in clip
                         else {}
                     )
@@ -856,9 +811,7 @@ def preselect_auto_references(
         )
     state["auto_selections"] = selections
     state["auto_selection_failures"] = failures
-    state["auto_review_queue"] = str(
-        _write_auto_review_queue(selections, review_queue_path)
-    )
+    state["auto_review_queue"] = str(_write_auto_review_queue(selections, review_queue_path))
     return state
 
 
@@ -886,10 +839,7 @@ def _review_decision(review):
 
 def merge_clip_reviews(state, *, review_path=default_review_path):
     document = _load_json(review_path, "Clip reviews", missing={"clips": []})
-    reviews = {
-        (item.get("bank"), item.get("media_id")): item
-        for item in document.get("clips", [])
-    }
+    reviews = {(item.get("bank"), item.get("media_id")): item for item in document.get("clips", [])}
     for clip in state.get("clips", []):
         review = reviews.get((clip["bank"], clip["media_id"]))
         if review is None:
@@ -922,25 +872,19 @@ def import_approved_references(
             selection_input.append(review)
         selected_reviews = select_reference_set(selection_input, speaker_name)
         selected_keys = {(item["bank"], item["media_id"]) for item in selected_reviews}
-        selected = [
-            clip for clip in clips if (clip["bank"], clip["media_id"]) in selected_keys
-        ]
+        selected = [clip for clip in clips if (clip["bank"], clip["media_id"]) in selected_keys]
         if not selected:
             continue
         imported = []
         for index, clip in enumerate(selected, start=1):
-            destination = (
-                output_directory / "references" / f"{clip['npc_id']}-{index:02d}.wav"
-            )
+            destination = output_directory / "references" / f"{clip['npc_id']}-{index:02d}.wav"
             trim_and_normalize_voice_reference(clip["wav"], destination)
             imported.append(
                 ImportedReference(
                     path=destination,
                     media_id=clip["media_id"],
                     source_sha256=clip["source_sha256"],
-                    reference_sha256=hashlib.sha256(
-                        destination.read_bytes()
-                    ).hexdigest(),
+                    reference_sha256=hashlib.sha256(destination.read_bytes()).hexdigest(),
                     bank=clip["bank"],
                 )
             )
@@ -992,9 +936,7 @@ def update_catalog_from_imports(
     if not isinstance(document, dict) or not isinstance(document.get("npcs"), list):
         raise Reverse1999BatchError("NPC catalog requires an NPC list")
 
-    existing_ids = {
-        str(item.get("id")) for item in document["npcs"] if isinstance(item, dict)
-    }
+    existing_ids = {str(item.get("id")) for item in document["npcs"] if isinstance(item, dict)}
     updates = []
     for imported in state.get("imports", []):
         npc_id = str(imported.get("npc_id", "")).strip()
@@ -1044,9 +986,7 @@ def update_catalog_from_imports(
             catalog = Reverse1999NpcCatalog.from_dict(document)
             catalog.validate_reference_files(reference_root)
         except Reverse1999CatalogError as error:
-            raise Reverse1999BatchError(
-                f"Generated NPC catalog is invalid: {error}"
-            ) from error
+            raise Reverse1999BatchError(f"Generated NPC catalog is invalid: {error}") from error
         atomic_write_json(catalog_path, document)
     state["catalog_updates"] = updates
     return state
@@ -1063,9 +1003,7 @@ def stage_counts(state):
         "unidentified": len(state.get("unidentified_npc_ids", [])),
         "unresolved": len(state.get("unresolved_npc_ids", [])),
         "extracted": len(state.get("clips", [])),
-        "scored": sum(
-            statuses[value] for value in ("scored", "approved", "rejected", "imported")
-        ),
+        "scored": sum(statuses[value] for value in ("scored", "approved", "rejected", "imported")),
         "pending_review": statuses["scored"],
         "rejected": statuses["rejected"],
         "approved": statuses["approved"],
@@ -1109,9 +1047,7 @@ def create_parser():
     parser.add_argument("--catalog", type=Path, default=default_catalog_path)
     parser.add_argument("--mappings", type=Path, default=default_mapping_path)
     parser.add_argument("--reviews", type=Path, default=default_review_path)
-    parser.add_argument(
-        "--auto-review-queue", type=Path, default=default_auto_review_path
-    )
+    parser.add_argument("--auto-review-queue", type=Path, default=default_auto_review_path)
     parser.add_argument("--output", type=Path, default=default_voice_output)
     parser.add_argument("--reference-root", type=Path, default=project_root / "data")
     parser.add_argument("--game-version", default="3.6.5")
@@ -1197,9 +1133,7 @@ def main(arguments=None):
             "auto-review": lambda: merge_clip_reviews(
                 state, review_path=arguments.auto_review_queue
             ),
-            "import": lambda: import_approved_references(
-                state, output_directory=arguments.output
-            ),
+            "import": lambda: import_approved_references(state, output_directory=arguments.output),
             "catalog": lambda: update_catalog_from_imports(
                 state,
                 catalog_path=arguments.catalog,

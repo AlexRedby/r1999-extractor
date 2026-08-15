@@ -147,11 +147,7 @@ class WwiseBankTest(unittest.TestCase):
         hirc = struct.pack("<I", 4) + sound + container + action + event
 
         routes = inspect_bank_data(
-            b"BKHD"
-            + struct.pack("<II", 4, 150)
-            + b"HIRC"
-            + struct.pack("<I", len(hirc))
-            + hirc
+            b"BKHD" + struct.pack("<II", 4, 150) + b"HIRC" + struct.pack("<I", len(hirc)) + hirc
         ).event_routes
 
         self.assertEqual(routes[0].sound_ids, (sound_id,))

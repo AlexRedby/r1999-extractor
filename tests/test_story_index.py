@@ -104,12 +104,8 @@ class StoryIndexTest(unittest.TestCase):
             "episode": "Synthetic Episode",
         }
         tables = {
-            "json_hero_story": [
-                [1, 1901, "", "", "hero", 0, 0, 1, "story", "fallback"]
-            ],
-            "json_episode": [
-                [190101, 1901, 4, "episode", "fallback", "", "", 301801]
-            ],
+            "json_hero_story": [[1, 1901, "", "", "hero", 0, 0, 1, "story", "fallback"]],
+            "json_episode": [[190101, 1901, 4, "episode", "fallback", "", "", 301801]],
         }
 
         annotated = annotate_anecdote_lines(lines, language, tables)
@@ -131,12 +127,8 @@ class StoryIndexTest(unittest.TestCase):
             "control": "Tap to continue",
         }
         tables = {
-            "json_hero_story": [
-                [26, 0, "", "", "hero", 0, 0, 26, "story", "fallback"]
-            ],
-            "json_hero_story_plot_group": [
-                [303701, 26, "episode", "fallback", 0, "", 1, "hero"]
-            ],
+            "json_hero_story": [[26, 0, "", "", "hero", 0, 0, 26, "story", "fallback"]],
+            "json_hero_story_plot_group": [[303701, 26, "episode", "fallback", 0, "", 1, "hero"]],
             "json_hero_story_plot": [
                 [303701004, 303701, "dialog", "", "role", "dialogue"],
                 [303701005, 303701, "aside", "", "", "aside"],
