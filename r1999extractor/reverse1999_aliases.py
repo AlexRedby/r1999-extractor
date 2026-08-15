@@ -2,6 +2,7 @@ from r1999extractor.reverse1999_catalog import normalize_name
 
 voice_aliases = {
     "Brimley": ("Slouch Hat",),
+    "Marguerite": ("Lorentz Butterfly",),
 }
 
 

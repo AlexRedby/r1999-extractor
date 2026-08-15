@@ -68,7 +68,14 @@ markup, normalizes known speaker aliases, adds previous/next-line context,
 classifies the 25 legacy anecdote chapters, adds config-only interactive hero
 stories, and resolves every original voice cue against decrypted audio
 configuration and the installed Wwise media. It rebuilds an outdated bank index
-automatically.
+automatically. The freshness check compares the indexed path, size, and
+nanosecond modification time of every `.bnk` file with the current English audio
+directory, so newly downloaded, removed, or replaced voice banks cannot be
+silently missed. Check it without rebuilding anything with:
+
+```bash
+r1999-bank-index --check
+```
 
 Every output line has one explicit audio status:
 
@@ -140,6 +147,58 @@ current text SHA-256 to a verified local WAV. VNTTS uses it only on an exact
 match and falls back to live TTS for stale, missing, rejected, or modified
 audio.
 
+Limit a queue to voiceless content introduced by patch 3.7: Chapter 13,
+`On Another's Sorrow`, and Silverwing Eagle's `The Eaglet Takes Wing`:
+
+```bash
+r1999-generation-queue \
+  --source-kind story \
+  --source-kind hero_story_plot \
+  --chapter-range 101301:101341 \
+  --chapter-range 315401:315408 \
+  --audio-status no_audio \
+  --output /path/to/patch-3.7-voiceless-queue.jsonl
+```
+
+Generate the covered voices with one persistent MOSS process. The command is
+resumable and skips queue characters that do not yet have a manifest reference,
+as well as captions that contain only a nonverbal sound effect such as
+`*chirp*` or `*bang*`:
+
+```bash
+../VisualNovelTextToSpeach/.venv/bin/python -m r1999extractor.moss_generation \
+  --queue /path/to/patch-3.7-voiceless-queue.jsonl \
+  --voice-manifest ../VisualNovelTextToSpeach/data/reverse1999-voices/manifest.json \
+  --narrator-character Matilda \
+  --output /path/to/patch-3.7-generated-audio
+```
+
+The VNTTS MOSS runtime must be installed first with
+`uv sync --project ../VisualNovelTextToSpeach/backends/moss-tts`. Narration uses
+the explicitly selected manifest character reference; it never falls back to
+an unconfigured voice.
+
+### Voice pregeneration UI
+
+Open the desktop workbench to generate voices without manually building queues
+or entering chapter ranges:
+
+```bash
+uv run r1999-pregenerate
+```
+
+The workbench discovers the newest local story index, groups main-story assets
+into chapters, groups both anecdote formats into complete named stories, and
+shows the number of voiceless lines before generation. Select any combination
+of chapters and anecdotes and press **Generate selected stories**. Each launch
+creates a separate resumable local job under the application-data directory.
+
+The status panel remains usable while MOSS runs and shows generated, pending,
+failed, missing-reference, and skipped sound-effect counts. Previous jobs can
+be selected and resumed from the same window. Source paths and the narrator
+voice are prefilled for the standard sibling VNTTS checkout and remain editable
+for other installations.
+
 Compare any set of local models on the same emotion-stratified sample:
 
 ```bash
@@ -176,7 +235,8 @@ On 2026-08-15, the project owner approved
 `moss-tts-local-transformer-v1.5-mlx` as the production model after completing
 all 45 blind preference trials. MOSS ranked first with 16 wins, no losses, and
 one tie across 17 reviewed comparisons (97.06% preference rate). This explicit
-decision satisfies the perceptual acceptance gate for full backlog generation.
+decision satisfies the perceptual acceptance gate for scoped generation of
+voiceless patch 3.7 main-story and Silverwing Eagle anecdote lines.
 
 Configure VNTTS with the generated story index and the voice manifest produced by the import/review tools. Extracted artifacts are deliberately ignored by Git.
 

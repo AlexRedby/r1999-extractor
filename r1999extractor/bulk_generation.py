@@ -19,7 +19,6 @@ from vntts_artifacts.generated_audio import write_generated_audio_manifest
 from vntts_artifacts.text_utils import slugify
 
 from r1999extractor.cli import cli_error, cli_success
-from r1999extractor.generation_queue import default_output as default_queue
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.versioned_json import VersionedJSONCodec, VersionedJSONError
 
@@ -29,6 +28,7 @@ generation_state_codec = VersionedJSONCodec(
     generation_state_schema, generation_state_version, "generation state"
 )
 default_output = get_local_data_directory() / "reverse1999" / "generated-audio"
+default_queue = get_local_data_directory() / "reverse1999" / "generation-queue.jsonl"
 
 
 class BulkGenerationError(RuntimeError):
@@ -142,6 +142,8 @@ def run_bulk_generation(
     limit=None,
     retries=2,
     include_prefer_source=False,
+    include_characters=None,
+    item_filter=None,
     seed=0,
 ):
     queue_path = Path(queue_path).expanduser().resolve()
@@ -158,6 +160,17 @@ def run_bulk_generation(
     if include_prefer_source:
         eligible_actions.add("prefer_source_audio")
     candidates = [item for item in items if item.get("action") in eligible_actions]
+    character_filter = None if include_characters is None else set(include_characters)
+    skipped_characters = 0
+    if character_filter is not None:
+        filtered = [item for item in candidates if item.get("voice_character") in character_filter]
+        skipped_characters = len(candidates) - len(filtered)
+        candidates = filtered
+    skipped_items = 0
+    if item_filter is not None:
+        filtered = [item for item in candidates if item_filter(item)]
+        skipped_items = len(candidates) - len(filtered)
+        candidates = filtered
     if limit is not None:
         candidates = candidates[:limit]
     generated = 0
@@ -177,9 +190,11 @@ def run_bulk_generation(
         destination = output_directory / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         attempts = int(existing.get("attempts", 0))
+        run_attempts = 0
         last_error = None
-        while attempts <= retries:
+        while run_attempts <= retries:
             attempts += 1
+            run_attempts += 1
             temporary = destination.with_suffix(".partial.wav")
             temporary.unlink(missing_ok=True)
             try:
@@ -220,6 +235,8 @@ def run_bulk_generation(
     return {
         "generated": generated,
         "failed": sum(value.get("status") == "failed" for value in state["items"].values()),
+        "skipped_characters": skipped_characters,
+        "skipped_items": skipped_items,
         "manifest": manifest_path,
         "state": state_path,
     }
@@ -293,6 +310,12 @@ def create_parser():
     generate.add_argument("--retries", type=int, default=2)
     generate.add_argument("--seed", type=int, default=0)
     generate.add_argument("--include-prefer-source", action="store_true")
+    generate.add_argument(
+        "--character",
+        action="append",
+        dest="include_characters",
+        help="Generate only this voice character; repeat to include more characters.",
+    )
     review = subparsers.add_parser("review")
     review.add_argument("--state", type=Path, default=default_output / "generation-state.json")
     review.add_argument("queue_id")
@@ -318,12 +341,15 @@ def main(arguments=None):
             limit=options.limit,
             retries=options.retries,
             include_prefer_source=options.include_prefer_source,
+            include_characters=options.include_characters,
             seed=options.seed,
         )
     except (BulkGenerationError, OSError, json.JSONDecodeError) as error:
         return cli_error(error)
     print(
-        f"Generated {result['generated']} item(s), {result['failed']} failed; "
+        f"Generated {result['generated']} item(s), {result['failed']} failed, "
+        f"{result['skipped_characters']} skipped by character filter; "
+        f"{result['skipped_items']} skipped by item filter; "
         f"manifest: {result['manifest']}"
     )
     return 0

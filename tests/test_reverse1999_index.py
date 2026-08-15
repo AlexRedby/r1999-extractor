@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from r1999extractor.reverse1999_index import (
+    bank_index_staleness_reasons,
     build_bank_index,
     classify_bank,
     main,
@@ -18,6 +19,40 @@ from r1999extractor.wwise import (
 
 
 class Reverse1999BankIndexTest(unittest.TestCase):
+    def test_detects_new_changed_and_removed_bank_inputs(self):
+        summary = WwiseBankSummary(154, ("BKHD",), (), 0, None)
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            original = root / "original.bnk"
+            original.write_bytes(b"original")
+            index, _output = build_bank_index(
+                root,
+                output=root / "index.json",
+                inspector=Mock(return_value=summary),
+            )
+
+            self.assertEqual(bank_index_staleness_reasons(index), [])
+
+            added = root / "added.bnk"
+            added.write_bytes(b"added")
+            self.assertRegex(
+                " ".join(bank_index_staleness_reasons(index)),
+                r"1 new bank\(s\): added\.bnk",
+            )
+
+            added.unlink()
+            original.write_bytes(b"changed and larger")
+            self.assertRegex(
+                " ".join(bank_index_staleness_reasons(index)),
+                r"1 changed bank\(s\): original\.bnk",
+            )
+
+            original.unlink()
+            self.assertRegex(
+                " ".join(bank_index_staleness_reasons(index)),
+                r"1 removed bank\(s\): original\.bnk",
+            )
+
     def test_classifies_story_and_activity_npc_bank_names(self):
         self.assertEqual(
             classify_bank("plotvoc_npc522301chapter9.bnk"),

@@ -70,6 +70,62 @@ class GenerationQueueTest(unittest.TestCase):
         queue = build_generation_queue(records)
         self.assertEqual([item["line_id"] for item in queue], ["earlier", "later"])
 
+    def test_filters_source_kinds_and_audio_statuses(self):
+        records = [
+            story_line(
+                "main-voiceless",
+                "A",
+                "Generate main story.",
+                "no_audio",
+                source_kind="story",
+                chapter="101301",
+            ),
+            story_line(
+                "anecdote-voiceless",
+                "A",
+                "Generate anecdote.",
+                "no_audio",
+                source_kind="hero_story_plot",
+                chapter="315401",
+            ),
+            story_line(
+                "recoverable",
+                "A",
+                "Keep source audio.",
+                "configured_unavailable",
+                source_kind="story",
+                chapter="101302",
+            ),
+            story_line(
+                "structured",
+                "A",
+                "Exclude structured dialogue.",
+                "no_audio",
+                source_kind="structured_dialogue",
+                chapter="101311",
+            ),
+            story_line(
+                "older-story",
+                "A",
+                "Exclude an older patch.",
+                "no_audio",
+                source_kind="story",
+                chapter="101201",
+            ),
+        ]
+
+        queue = build_generation_queue(
+            records,
+            source_kinds=("story", "hero_story_plot"),
+            included_audio_statuses=("no_audio",),
+            chapter_ranges=((101301, 101341), (315401, 315408)),
+        )
+
+        self.assertEqual(
+            {item["line_id"] for item in queue},
+            {"main-voiceless", "anecdote-voiceless"},
+        )
+
     def test_rejects_hash_drift(self):
         record = story_line("changed", "A", "Current text.", "no_audio")
         record["text_sha256"] = "0" * 64
@@ -96,7 +152,12 @@ class GenerationQueueTest(unittest.TestCase):
             )
             _metadata, records = load_story_records(story_index)
             output, metadata = write_generation_queue(
-                build_generation_queue(records), story_index, root / "queue.jsonl"
+                build_generation_queue(records),
+                story_index,
+                root / "queue.jsonl",
+                source_kinds=("story", "hero_story_plot"),
+                included_audio_statuses=("no_audio",),
+                chapter_ranges=((101301, 101341), (315401, 315408)),
             )
             rows = [json.loads(row) for row in output.read_text().splitlines()]
 
@@ -104,6 +165,14 @@ class GenerationQueueTest(unittest.TestCase):
         self.assertEqual(rows[0]["schema_version"], 1)
         self.assertEqual(rows[0]["item_count"], 1)
         self.assertEqual(metadata["source_audio_status_counts"], {"no_audio": 1})
+        self.assertEqual(
+            metadata["filters"],
+            {
+                "source_kinds": ["hero_story_plot", "story"],
+                "audio_statuses": ["no_audio"],
+                "chapter_ranges": ["101301:101341", "315401:315408"],
+            },
+        )
         self.assertEqual(rows[1]["record_type"], "generation_item")
 
 

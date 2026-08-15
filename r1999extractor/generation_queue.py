@@ -80,12 +80,33 @@ def generation_action(audio_status):
     }.get(audio_status, "manual_review")
 
 
-def build_generation_queue(records):
+def build_generation_queue(
+    records,
+    *,
+    source_kinds=None,
+    included_audio_statuses=None,
+    chapter_ranges=None,
+):
+    source_kind_filter = None if source_kinds is None else set(source_kinds)
+    audio_status_filter = None if included_audio_statuses is None else set(included_audio_statuses)
+    chapter_range_filter = None if chapter_ranges is None else tuple(chapter_ranges)
     queue = []
     for record in records:
         if record.get("speakable", True) is False:
             continue
+        source_kind = str(record.get("source_kind") or "story")
+        if source_kind_filter is not None and source_kind not in source_kind_filter:
+            continue
+        if chapter_range_filter is not None:
+            try:
+                chapter = int(record.get("chapter"))
+            except (TypeError, ValueError):
+                continue
+            if not any(start <= chapter <= end for start, end in chapter_range_filter):
+                continue
         audio_status = str(record.get("audio_status") or "unchecked")
+        if audio_status_filter is not None and audio_status not in audio_status_filter:
+            continue
         if audio_status == "installed":
             continue
         if audio_status not in audio_statuses and audio_status != "unchecked":
@@ -111,7 +132,7 @@ def build_generation_queue(records):
             "kind": str(record.get("kind") or "dialogue"),
             "previous_text": record.get("previous_text"),
             "next_text": record.get("next_text"),
-            "source_kind": str(record.get("source_kind") or "story"),
+            "source_kind": source_kind,
             "story_group": record.get("story_group"),
             "story_title": record.get("story_title"),
             "episode_title": record.get("episode_title"),
@@ -147,7 +168,15 @@ def build_generation_queue(records):
     return queue
 
 
-def write_generation_queue(queue, story_index, output=default_output):
+def write_generation_queue(
+    queue,
+    story_index,
+    output=default_output,
+    *,
+    source_kinds=None,
+    included_audio_statuses=None,
+    chapter_ranges=None,
+):
     story_index = Path(story_index).expanduser().resolve()
     output = Path(output).expanduser().resolve()
     metadata = {
@@ -168,12 +197,36 @@ def write_generation_queue(queue, story_index, output=default_output):
         "source_kind_counts": dict(sorted(Counter(item["source_kind"] for item in queue).items())),
         "delivery_annotation_version": delivery_annotation_version,
     }
+    if (
+        source_kinds is not None
+        or included_audio_statuses is not None
+        or chapter_ranges is not None
+    ):
+        metadata["filters"] = {
+            "source_kinds": sorted(set(source_kinds or ())),
+            "audio_statuses": sorted(set(included_audio_statuses or ())),
+            "chapter_ranges": [f"{start}:{end}" for start, end in chapter_ranges or ()],
+        }
     with atomic_output_path(output) as temporary:
         with temporary.open("w", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps(metadata, ensure_ascii=False, sort_keys=True) + "\n")
             for item in queue:
                 stream.write(json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n")
     return output, metadata
+
+
+def parse_chapter_range(value):
+    try:
+        start_text, end_text = value.split(":", 1)
+        start = int(start_text)
+        end = int(end_text)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            "chapter range must use integer START:END format"
+        ) from error
+    if start > end:
+        raise argparse.ArgumentTypeError("chapter range start must not exceed its end")
+    return start, end
 
 
 def create_parser():
@@ -185,6 +238,26 @@ def create_parser():
     )
     parser.add_argument("--story-index", type=Path, default=default_story_index)
     parser.add_argument("--output", type=Path, default=default_output)
+    parser.add_argument(
+        "--source-kind",
+        action="append",
+        dest="source_kinds",
+        help="Include only this source kind; repeat to include multiple kinds.",
+    )
+    parser.add_argument(
+        "--audio-status",
+        action="append",
+        dest="included_audio_statuses",
+        choices=sorted(audio_statuses | {"unchecked"}),
+        help="Include only this source-audio status; repeat to include multiple statuses.",
+    )
+    parser.add_argument(
+        "--chapter-range",
+        action="append",
+        dest="chapter_ranges",
+        type=parse_chapter_range,
+        help="Include only numeric chapters in inclusive START:END; repeat for more ranges.",
+    )
     return parser
 
 
@@ -192,8 +265,20 @@ def main(arguments=None):
     options = create_parser().parse_args(arguments)
     try:
         _metadata, records = load_story_records(options.story_index)
-        queue = build_generation_queue(records)
-        output, metadata = write_generation_queue(queue, options.story_index, options.output)
+        queue = build_generation_queue(
+            records,
+            source_kinds=options.source_kinds,
+            included_audio_statuses=options.included_audio_statuses,
+            chapter_ranges=options.chapter_ranges,
+        )
+        output, metadata = write_generation_queue(
+            queue,
+            options.story_index,
+            options.output,
+            source_kinds=options.source_kinds,
+            included_audio_statuses=options.included_audio_statuses,
+            chapter_ranges=options.chapter_ranges,
+        )
     except (GenerationQueueError, OSError) as error:
         return cli_error(error)
     actions = ", ".join(f"{key}={value}" for key, value in metadata["action_counts"].items())

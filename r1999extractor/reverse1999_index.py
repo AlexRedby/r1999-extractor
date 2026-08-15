@@ -25,6 +25,88 @@ class Reverse1999IndexError(RuntimeError):
     pass
 
 
+def discover_bank_files(root):
+    root = Path(root).expanduser().resolve()
+    return tuple(
+        sorted(
+            (
+                path
+                for path in root.rglob("*")
+                if path.is_file() and path.suffix.casefold() == ".bnk"
+            ),
+            key=lambda path: path.relative_to(root).as_posix().casefold(),
+        )
+    )
+
+
+def bank_index_staleness_reasons(index, game_audio_directory=None):
+    if not isinstance(index, dict):
+        return ["bank index is not a JSON object"]
+    if index.get("version") != index_version:
+        return [f"bank index version {index.get('version')!r} does not match {index_version}"]
+    configured_root = index.get("game_audio_directory")
+    if not isinstance(configured_root, str) or not configured_root:
+        return ["bank index has no game audio directory"]
+    root = Path(game_audio_directory or configured_root).expanduser().resolve()
+    if str(root) != str(Path(configured_root).expanduser().resolve()):
+        return [f"game audio directory changed: {configured_root} -> {root}"]
+    if not root.is_dir():
+        return [f"game audio directory does not exist: {root}"]
+
+    entries = index.get("banks")
+    if not isinstance(entries, list):
+        return ["bank index has no valid bank list"]
+    if isinstance(index.get("bank_count"), int) and index["bank_count"] != len(entries):
+        return ["bank index count does not match its bank list"]
+    stored = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return ["bank index contains an invalid bank entry"]
+        relative_path = entry.get("path")
+        size = entry.get("size")
+        mtime_ns = entry.get("mtime_ns")
+        if (
+            not isinstance(relative_path, str)
+            or not relative_path
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or not isinstance(mtime_ns, int)
+            or isinstance(mtime_ns, bool)
+        ):
+            return ["bank index entry is missing its source fingerprint"]
+        if relative_path in stored:
+            return [f"bank index contains duplicate path: {relative_path}"]
+        stored[relative_path] = (size, mtime_ns)
+
+    current = {}
+    try:
+        for path in discover_bank_files(root):
+            stat = path.stat()
+            current[path.relative_to(root).as_posix()] = (stat.st_size, stat.st_mtime_ns)
+    except OSError as error:
+        return [f"unable to fingerprint installed banks: {error}"]
+
+    added = sorted(set(current) - set(stored), key=str.casefold)
+    removed = sorted(set(stored) - set(current), key=str.casefold)
+    changed = sorted(
+        (path for path in set(current) & set(stored) if current[path] != stored[path]),
+        key=str.casefold,
+    )
+    reasons = []
+    for label, paths in (
+        ("new", added),
+        ("removed", removed),
+        ("changed", changed),
+    ):
+        if not paths:
+            continue
+        examples = ", ".join(paths[:3])
+        if len(paths) > 3:
+            examples += f", and {len(paths) - 3} more"
+        reasons.append(f"{len(paths)} {label} bank(s): {examples}")
+    return reasons
+
+
 def create_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -47,6 +129,11 @@ def create_parser():
         "--force",
         action="store_true",
         help="Reinspect every bank instead of reusing unchanged entries.",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Report whether the existing index matches the installed banks.",
     )
     return parser
 
@@ -159,10 +246,7 @@ def build_bank_index(
     root = Path(game_audio_directory).expanduser().resolve()
     if not root.is_dir():
         raise Reverse1999IndexError(f"Game audio directory does not exist: {root}")
-    banks = sorted(
-        (path for path in root.rglob("*") if path.is_file() and path.suffix.casefold() == ".bnk"),
-        key=lambda path: path.relative_to(root).as_posix().casefold(),
-    )
+    banks = discover_bank_files(root)
     if not banks:
         raise Reverse1999IndexError(f"No .bnk files found in {root}")
 
@@ -222,6 +306,19 @@ def main(arguments=None):
         if current == total or current % 100 == 0:
             action = "Reused" if reused else "Indexed"
             print(f"{action} {current}/{total}: {bank.name}")
+
+    if arguments.check:
+        try:
+            index = json.loads(arguments.output.expanduser().read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            print(f"Bank index is stale: unable to read {arguments.output}: {error}")
+            return 1
+        reasons = bank_index_staleness_reasons(index, game_audio_directory)
+        if reasons:
+            print("Bank index is stale: " + "; ".join(reasons))
+            return 1
+        print(f"Bank index is up to date: {arguments.output.expanduser().resolve()}")
+        return 0
 
     try:
         index, output = build_bank_index(

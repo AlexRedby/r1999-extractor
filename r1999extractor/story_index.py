@@ -20,6 +20,7 @@ from r1999extractor.reverse1999_config import (
 )
 from r1999extractor.reverse1999_index import (
     Reverse1999IndexError,
+    bank_index_staleness_reasons,
     build_bank_index,
 )
 from r1999extractor.reverse1999_index import (
@@ -225,6 +226,121 @@ def annotate_anecdote_lines(lines, language, tables):
     return annotated
 
 
+def annotate_main_story_episode_lines(lines, language, tables):
+    """Map internal Unity story assets onto player-visible main-story episodes."""
+    by_source = {}
+    chapter_positions = defaultdict(int)
+    for row in tables.get("json_episode", []):
+        if not isinstance(row, list) or len(row) <= 9:
+            continue
+        try:
+            episode_id = int(row[0])
+            story_asset = int(row[7])
+        except (TypeError, ValueError):
+            continue
+        if not 100000 <= story_asset < 200000:
+            continue
+        story_group = story_asset // 100
+        if not 1000 <= story_group <= 1019:
+            continue
+        chapter_number = story_group - 1000
+        chapter_positions[chapter_number] += 1
+        position = chapter_positions[chapter_number]
+        title = (
+            _language_text(
+                language,
+                row[3] if len(row) > 3 else "",
+                row[4] if len(row) > 4 else "",
+            )
+            or f"Episode {position}"
+        )
+        metadata = {
+            "story_group": f"main:{chapter_number}",
+            "story_title": "Prologue" if chapter_number == 0 else f"Chapter {chapter_number}",
+            "episode_title": title,
+            "episode_id": episode_id,
+            "story_order": position,
+        }
+        by_source[f"json_story_step_{story_asset}"] = metadata
+        try:
+            continuation_asset = int(row[9])
+        except (TypeError, ValueError):
+            continuation_asset = 0
+        if 100000 <= continuation_asset < 200000:
+            by_source[f"json_story_step_{continuation_asset}"] = metadata
+
+    annotated = []
+    for line in lines:
+        metadata = by_source.get(line.source)
+        if metadata is None:
+            annotated.append(line)
+            continue
+        annotated.append(
+            replace(
+                line,
+                story_group=metadata["story_group"],
+                story_title=metadata["story_title"],
+                episode_title=metadata["episode_title"],
+                story_order=metadata["story_order"] * 10_000 + line.sequence,
+            )
+        )
+    return annotated
+
+
+def annotate_activity220_story_lines(lines, language, tables):
+    """Attach character-event titles to activity 220 Unity story assets."""
+    activity_titles = {}
+    for row in tables.get("json_activity", []):
+        if not isinstance(row, list) or len(row) <= 1:
+            continue
+        try:
+            activity_id = int(row[0])
+        except (TypeError, ValueError):
+            continue
+        title = _language_text(language, row[1])
+        if title:
+            activity_titles[activity_id] = title
+
+    by_source = {}
+    group_positions = defaultdict(int)
+    for row in tables.get("json_activity220_episode", []):
+        if not isinstance(row, list) or len(row) <= 5:
+            continue
+        try:
+            activity_id = int(row[0])
+            episode_id = int(row[1])
+            story_asset = int(row[5])
+        except (TypeError, ValueError):
+            continue
+        if activity_id <= 0 or episode_id <= 0 or story_asset <= 0:
+            continue
+        group_positions[activity_id] += 1
+        by_source[f"json_story_step_{story_asset}"] = {
+            "story_group": str(activity_id),
+            "story_title": activity_titles.get(activity_id, ""),
+            "episode_title": _language_text(language, row[4]),
+            "story_order": group_positions[activity_id],
+        }
+
+    annotated = []
+    for line in lines:
+        metadata = by_source.get(line.source)
+        if metadata is None:
+            annotated.append(line)
+            continue
+        annotated.append(
+            replace(
+                line,
+                source_kind="activity_story",
+                story_group=metadata["story_group"],
+                story_title=metadata["story_title"] or None,
+                episode_title=metadata["episode_title"] or None,
+                story_order=metadata["story_order"] * 1_000 + line.sequence,
+            )
+        )
+    return annotated
+
+
 def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=False):
     """Extract spoken and narratable text from config-only interactive hero stories."""
     hero_stories = {}
@@ -318,7 +434,9 @@ def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=Fal
 def enrich_story_sources(lines, language, tables, *, include_non_speakable=False):
     from r1999extractor.structured_story import extract_structured_story_lines
 
-    annotated = annotate_anecdote_lines(lines, language, tables)
+    annotated = annotate_main_story_episode_lines(lines, language, tables)
+    annotated = annotate_anecdote_lines(annotated, language, tables)
+    annotated = annotate_activity220_story_lines(annotated, language, tables)
     hero_lines = extract_hero_story_plot_lines(
         language,
         tables,
@@ -467,24 +585,38 @@ def build_story_audio_resolver(
     except StoryAudioResolutionError as error:
         raise Reverse1999StoryError(str(error)) from error
     bank_index_path = Path(bank_index_path).expanduser().resolve()
+    bank_index = None
     try:
-        resolver = StoryAudioResolver.from_file(registry, bank_index_path)
-    except StoryAudioResolutionError as error:
-        audio_root = game_audio_directory or find_game_audio_directory()
-        if audio_root is None:
-            raise Reverse1999StoryError(
-                "Unable to find installed English audio; pass --game-audio-directory"
-            ) from error
+        bank_index = json.loads(bank_index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    audio_root = game_audio_directory or find_game_audio_directory()
+    if bank_index is not None:
+        reasons = bank_index_staleness_reasons(bank_index, audio_root)
+        if not reasons:
+            try:
+                return StoryAudioResolver(registry, bank_index)
+            except StoryAudioResolutionError:
+                pass
+        if (
+            audio_root is None
+            and isinstance(bank_index, dict)
+            and isinstance(bank_index.get("game_audio_directory"), str)
+        ):
+            audio_root = Path(bank_index["game_audio_directory"])
+    if audio_root is None:
+        raise Reverse1999StoryError(
+            "Unable to find installed English audio; pass --game-audio-directory"
+        )
+    try:
         bank_index, _output = build_bank_index(
             audio_root,
             output=bank_index_path,
             progress=progress,
         )
-        try:
-            resolver = StoryAudioResolver(registry, bank_index)
-        except StoryAudioResolutionError as resolver_error:
-            raise Reverse1999StoryError(str(resolver_error)) from resolver_error
-    return resolver
+        return StoryAudioResolver(registry, bank_index)
+    except (Reverse1999IndexError, StoryAudioResolutionError) as error:
+        raise Reverse1999StoryError(str(error)) from error
 
 
 def write_story_index(lines, output=default_output, *, bundle=None):

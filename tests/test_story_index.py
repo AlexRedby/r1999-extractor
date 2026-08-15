@@ -2,10 +2,15 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
+from r1999extractor.reverse1999_index import index_version
 from r1999extractor.story_index import (
     add_story_context,
+    annotate_activity220_story_lines,
     annotate_anecdote_lines,
+    annotate_main_story_episode_lines,
+    build_story_audio_resolver,
     classify_speakable_english,
     extract_hero_story_plot_lines,
     parse_story_document,
@@ -24,6 +29,52 @@ def payload(speaker, text, *, voice="", portrait=""):
 
 
 class StoryIndexTest(unittest.TestCase):
+    def test_rebuilds_bank_index_when_new_bank_is_installed(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            old_bank = root / "old.bnk"
+            old_bank.write_bytes(b"old")
+            old_stat = old_bank.stat()
+            index_path = root / "index.json"
+            old_index = {
+                "version": index_version,
+                "game_audio_directory": str(root),
+                "banks": [
+                    {
+                        "path": old_bank.name,
+                        "filename": old_bank.name,
+                        "size": old_stat.st_size,
+                        "mtime_ns": old_stat.st_mtime_ns,
+                    }
+                ],
+            }
+            index_path.write_text(json.dumps(old_index), encoding="utf-8")
+            new_bank = root / "new.bnk"
+            new_bank.write_bytes(b"new")
+            new_index = {
+                "version": index_version,
+                "game_audio_directory": str(root),
+                "banks": [],
+            }
+
+            with (
+                patch(
+                    "r1999extractor.story_index.load_config_directory",
+                    return_value=({}, {}),
+                ),
+                patch(
+                    "r1999extractor.story_index.build_bank_index",
+                    return_value=(new_index, index_path),
+                ) as rebuild,
+            ):
+                build_story_audio_resolver(
+                    config_directory=root,
+                    bank_index_path=index_path,
+                    game_audio_directory=root,
+                )
+
+        rebuild.assert_called_once_with(root, output=index_path.resolve(), progress=None)
+
     def test_parses_dialogue_and_narration_into_generic_lines(self):
         document = [
             "title",
@@ -115,6 +166,58 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(annotated[0].story_group, "1901")
         self.assertEqual(annotated[0].story_title, "Synthetic Anecdote")
         self.assertEqual(annotated[0].episode_title, "Synthetic Episode")
+
+    def test_classifies_activity220_character_story_assets(self):
+        lines = parse_story_document(
+            ["title", "", [[1, "step", payload("Rhiannon", "Character story line.")]]],
+            "json_story_step_314601",
+        )
+        language = {
+            "activity": "The You That's Meant To Be",
+            "episode": "The Young Traveler",
+        }
+        tables = {
+            "json_activity": [[13710, "activity"]],
+            "json_activity220_episode": [[13710, 1371001, 0, 0, "episode", 314601]],
+        }
+
+        annotated = annotate_activity220_story_lines(lines, language, tables)
+
+        self.assertEqual(len(annotated), 1)
+        self.assertEqual(annotated[0].source_kind, "activity_story")
+        self.assertEqual(annotated[0].story_group, "13710")
+        self.assertEqual(annotated[0].story_title, "The You That's Meant To Be")
+        self.assertEqual(annotated[0].episode_title, "The Young Traveler")
+
+    def test_maps_split_main_story_assets_to_player_visible_episodes(self):
+        lines = [
+            *parse_story_document(
+                ["title", "", [[1, "step", payload("A", "First part.")]]],
+                "json_story_step_101201",
+            ),
+            *parse_story_document(
+                ["title", "", [[1, "step", payload("A", "Second part.")]]],
+                "json_story_step_101202",
+            ),
+            *parse_story_document(
+                ["title", "", [[1, "step", payload("B", "Next episode.")]]],
+                "json_story_step_101203",
+            ),
+        ]
+        language = {"named": "The Eternal Autumn"}
+        tables = {
+            "json_episode": [
+                [1201, 12, 1, "", "", "", "", 101201, "", 101202],
+                [11202, 112, 4, "named", "named", "", "", 101203, "", 0],
+            ]
+        }
+
+        annotated = annotate_main_story_episode_lines(lines, language, tables)
+
+        self.assertEqual(annotated[0].episode_title, "Episode 1")
+        self.assertEqual(annotated[1].episode_title, "Episode 1")
+        self.assertEqual(annotated[2].episode_title, "The Eternal Autumn")
+        self.assertEqual({line.story_group for line in annotated}, {"main:12"})
 
     def test_extracts_config_only_hero_story_dialogue_and_narration(self):
         language = {
