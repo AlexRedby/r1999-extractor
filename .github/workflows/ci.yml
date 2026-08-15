@@ -52,7 +52,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install Qt runtime libraries
-        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install --yes libegl1 libgl1 libpulse0
 
       - name: Install locked UI dependencies
         run: uv sync --extra ui --frozen
