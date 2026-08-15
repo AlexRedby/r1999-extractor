@@ -6,10 +6,8 @@ git history and stable behavior belongs in project documentation.
 
 ## Ahead-of-time voice generation
 
-- [ ] Complete the human listening scores for the locally installed candidate
-      models and select the production model before generating the full
-      estimated backlog. This is an explicit perceptual acceptance gate, not an
-      automatically inferred quality score.
+- [ ] Generate and review the full estimated audio backlog with the approved
+      `moss-tts-local-transformer-v1.5-mlx` production model.
 
 ## Versioned VNTTS delivery
 

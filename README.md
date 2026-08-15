@@ -170,6 +170,14 @@ model key is stored separately in `.blind-key.json`; the aggregate preference
 report is unblinded and still requires an explicit human production-model
 decision. Model configuration and generated samples stay local.
 
+### Production model decision
+
+On 2026-08-15, the project owner approved
+`moss-tts-local-transformer-v1.5-mlx` as the production model after completing
+all 45 blind preference trials. MOSS ranked first with 16 wins, no losses, and
+one tie across 17 reviewed comparisons (97.06% preference rate). This explicit
+decision satisfies the perceptual acceptance gate for full backlog generation.
+
 Configure VNTTS with the generated story index and the voice manifest produced by the import/review tools. Extracted artifacts are deliberately ignored by Git.
 
 If you used the extraction tools while they were part of VNTTS, copy the local
