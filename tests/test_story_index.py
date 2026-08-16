@@ -1,16 +1,21 @@
 import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from vntts_artifacts.story_index import load_story_index
+
 from r1999extractor.reverse1999_index import index_version
 from r1999extractor.story_index import (
+    Reverse1999StoryError,
     add_story_context,
     annotate_activity220_story_lines,
     annotate_anecdote_lines,
     annotate_main_story_episode_lines,
     build_story_audio_resolver,
+    build_story_collections,
     classify_speakable_english,
     extract_hero_story_plot_lines,
     parse_story_document,
@@ -100,6 +105,13 @@ class StoryIndexTest(unittest.TestCase):
             ["title", "", [[1, "step", payload("A", "Text")]]],
             "json_story_step_1001",
         )
+        lines = [
+            replace(
+                lines[0],
+                audio_status="installed",
+                source_voice_id="7",
+            )
+        ]
         with TemporaryDirectory() as temporary_directory:
             output = write_story_index(lines, Path(temporary_directory) / "story.jsonl")
             records = [json.loads(row) for row in output.read_text(encoding="utf-8").splitlines()]
@@ -107,6 +119,71 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(records[0]["schema_version"], 1)
         self.assertEqual(records[1]["record_type"], "line")
         self.assertEqual(len(records[1]["text_sha256"]), 64)
+        self.assertEqual(records[1]["source_audio_status"], "available")
+        self.assertEqual(records[1]["source_audio_id"], "7")
+
+    def test_writes_game_derived_collection_catalog_and_line_membership(self):
+        main = annotate_main_story_episode_lines(
+            parse_story_document(
+                ["title", "", [[1, "step", payload("A", "Main line.")]]],
+                "json_story_step_101301",
+            ),
+            {"episode": "A Long Road"},
+            {"json_episode": [[1, 13, 1, "episode", "", "", "", 101301, "", 0]]},
+        )[0]
+        anecdote = annotate_anecdote_lines(
+            parse_story_document(
+                ["title", "", [[1, "step", payload("B", "Anecdote line.")]]],
+                "json_story_step_301801",
+            ),
+            {"story": "The Eaglet Takes Wing", "episode": "Departure"},
+            {
+                "json_hero_story": [[1, 1901, "", "", "", 0, 0, 1, "story", ""]],
+                "json_episode": [[1, 1901, 1, "episode", "", "", "", 301801]],
+            },
+        )[0]
+
+        with TemporaryDirectory() as temporary_directory:
+            output = write_story_index([anecdote, main], Path(temporary_directory) / "story.jsonl")
+            records = [json.loads(row) for row in output.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(
+            records[0]["collections"],
+            [
+                {
+                    "collection_id": "reverse1999:main-story:13",
+                    "kind": "main_story",
+                    "order": 13,
+                    "title": "Chapter 13",
+                },
+                {
+                    "collection_id": "reverse1999:anecdote:1901",
+                    "kind": "anecdote",
+                    "order": 1,
+                    "title": "The Eaglet Takes Wing",
+                },
+            ],
+        )
+        self.assertEqual(records[1]["collection_id"], "reverse1999:anecdote:1901")
+        self.assertEqual(records[2]["collection_id"], "reverse1999:main-story:13")
+
+    def test_collection_extensions_remain_readable_by_schema_v1_loader(self):
+        line = replace(
+            parse_story_document(
+                ["title", "", [[1, "step", payload("A", "A story line.")]]],
+                "json_story_step_1001",
+            )[0],
+            collection_id="reverse1999:anecdote:1",
+            collection_title="A Story",
+            collection_kind="anecdote",
+            collection_order=1,
+        )
+        with TemporaryDirectory() as temporary_directory:
+            output = write_story_index([line], Path(temporary_directory) / "story.jsonl")
+            metadata, loaded_lines = load_story_index(output)
+
+        self.assertEqual(metadata["collections"][0]["collection_id"], line.collection_id)
+        self.assertEqual(loaded_lines[0].line_id, line.line_id)
 
     def test_filters_non_english_and_test_placeholder_lines_by_default(self):
         document = [
@@ -166,6 +243,8 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(annotated[0].story_group, "1901")
         self.assertEqual(annotated[0].story_title, "Synthetic Anecdote")
         self.assertEqual(annotated[0].episode_title, "Synthetic Episode")
+        self.assertEqual(annotated[0].collection_id, "reverse1999:anecdote:1901")
+        self.assertEqual(annotated[0].collection_kind, "anecdote")
 
     def test_classifies_activity220_character_story_assets(self):
         lines = parse_story_document(
@@ -188,6 +267,11 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(annotated[0].story_group, "13710")
         self.assertEqual(annotated[0].story_title, "The You That's Meant To Be")
         self.assertEqual(annotated[0].episode_title, "The Young Traveler")
+        self.assertEqual(
+            annotated[0].collection_id,
+            "reverse1999:character-story:activity220:13710",
+        )
+        self.assertEqual(annotated[0].collection_kind, "character_story")
 
     def test_maps_split_main_story_assets_to_player_visible_episodes(self):
         lines = [
@@ -218,6 +302,7 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(annotated[1].episode_title, "Episode 1")
         self.assertEqual(annotated[2].episode_title, "The Eternal Autumn")
         self.assertEqual({line.story_group for line in annotated}, {"main:12"})
+        self.assertEqual({line.collection_id for line in annotated}, {"reverse1999:main-story:12"})
 
     def test_extracts_config_only_hero_story_dialogue_and_narration(self):
         language = {
@@ -247,8 +332,43 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(lines[0].audio_status, "no_audio")
         self.assertEqual(lines[0].story_title, "Synthetic Story")
         self.assertEqual(lines[0].episode_title, "Synthetic Chapter")
+        self.assertEqual(lines[0].collection_id, "reverse1999:anecdote:hero-story:26")
+        self.assertEqual(lines[0].collection_order, 1)
         self.assertEqual(lines[0].next_text, "A synthetic narration line.")
         self.assertEqual(lines[1].kind, "narration")
+
+    def test_rejects_conflicting_collection_metadata(self):
+        lines = parse_story_document(
+            [
+                "title",
+                "",
+                [
+                    [1, "step", payload("A", "One.")],
+                    [2, "step", payload("A", "Two.")],
+                ],
+            ],
+            "json_story_step_1001",
+        )
+        first = replace(
+            lines[0],
+            collection_id="reverse1999:test:1",
+            collection_title="One",
+            collection_kind="anecdote",
+            collection_order=1,
+        )
+        second = replace(
+            lines[1],
+            collection_id="reverse1999:test:1",
+            collection_title="Two",
+            collection_kind="anecdote",
+            collection_order=1,
+        )
+
+        with self.assertRaisesRegex(
+            Reverse1999StoryError,
+            "Conflicting collection metadata",
+        ):
+            build_story_collections([first, second])
 
 
 if __name__ == "__main__":

@@ -4,11 +4,6 @@ from pathlib import Path
 from vntts_artifacts.atomic_io import atomic_write_json
 
 from r1999extractor.cli import cli_error
-from r1999extractor.generation_queue import (
-    build_generation_queue,
-    load_story_records,
-    write_generation_queue,
-)
 from r1999extractor.reverse1999_catalog import (
     _load_overlay,
     build_catalog_document,
@@ -86,14 +81,7 @@ def bootstrap_local_artifacts(
     lines = resolve_story_audio(lines, resolver)
     story_path = write_story_index(lines, output / "story-index.jsonl", bundle=bundle)
 
-    progress("Building generation queue")
-    _metadata, records = load_story_records(story_path)
-    queue = build_generation_queue(records)
-    queue_path, queue_metadata = write_generation_queue(
-        queue,
-        story_path,
-        output / "generation-queue.jsonl",
-    )
+    progress("Auditing story source coverage")
     audit = audit_story_like_tables(language, tables)
     audit.update({"schema": "r1999.story-source-audit", "schema_version": 1})
     audit_path = atomic_write_json(output / "story-source-audit.json", audit, sort_keys=True)
@@ -101,10 +89,8 @@ def bootstrap_local_artifacts(
         "bank_index": bank_index_path,
         "catalog": catalog_path,
         "story_index": story_path,
-        "generation_queue": queue_path,
         "source_audit": audit_path,
         "story_line_count": len(lines),
-        "generation_item_count": queue_metadata["item_count"],
     }
 
 
@@ -135,10 +121,7 @@ def main(arguments=None):
         )
     except (BootstrapError, OSError, ValueError) as error:
         return cli_error(error)
-    print(
-        f"Built {result['story_line_count']} story lines and "
-        f"{result['generation_item_count']} generation items"
-    )
+    print(f"Built {result['story_line_count']} story lines and source artifacts")
     return 0
 
 

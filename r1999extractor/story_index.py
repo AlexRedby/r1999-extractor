@@ -5,7 +5,7 @@ import os
 import re
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,6 +41,20 @@ rich_text_pattern = re.compile(r"<[^>]*>")
 latin_pattern = re.compile(r"[A-Za-z]")
 cjk_pattern = re.compile(r"[\u3400-\u9fff]")
 ascii_word_pattern = re.compile(r"[A-Za-z]{2,}")
+
+source_audio_status_by_extractor_status = {
+    "configured_unavailable": "unavailable",
+    "installed": "available",
+    "no_audio": "absent",
+    "unchecked": "unknown",
+    "unresolved": "unknown",
+}
+
+collection_kind_order = {
+    "main_story": 0,
+    "anecdote": 1,
+    "character_story": 2,
+}
 
 
 class Reverse1999StoryError(RuntimeError):
@@ -78,6 +92,10 @@ class StoryLine:
     story_title: str | None = None
     episode_title: str | None = None
     story_order: int | None = None
+    collection_id: str | None = None
+    collection_title: str | None = None
+    collection_kind: str | None = None
+    collection_order: int | None = None
 
 
 def _localized(value, language_index):
@@ -221,6 +239,10 @@ def annotate_anecdote_lines(lines, language, tables):
                 story_title=metadata["story_title"] or None,
                 episode_title=metadata["episode_title"] or None,
                 story_order=(metadata["story_order"] * 1_000) + metadata["episode_order"],
+                collection_id=f"reverse1999:anecdote:{metadata['story_group']}",
+                collection_title=metadata["story_title"] or f"Anecdote {metadata['story_group']}",
+                collection_kind="anecdote",
+                collection_order=metadata["story_order"],
             )
         )
     return annotated
@@ -282,6 +304,10 @@ def annotate_main_story_episode_lines(lines, language, tables):
                 story_title=metadata["story_title"],
                 episode_title=metadata["episode_title"],
                 story_order=metadata["story_order"] * 10_000 + line.sequence,
+                collection_id=f"reverse1999:main-story:{metadata['story_group'].removeprefix('main:')}",
+                collection_title=metadata["story_title"],
+                collection_kind="main_story",
+                collection_order=int(metadata["story_group"].removeprefix("main:")),
             )
         )
     return annotated
@@ -303,6 +329,7 @@ def annotate_activity220_story_lines(lines, language, tables):
 
     by_source = {}
     group_positions = defaultdict(int)
+    collection_positions = {}
     for row in tables.get("json_activity220_episode", []):
         if not isinstance(row, list) or len(row) <= 5:
             continue
@@ -314,12 +341,14 @@ def annotate_activity220_story_lines(lines, language, tables):
             continue
         if activity_id <= 0 or episode_id <= 0 or story_asset <= 0:
             continue
+        collection_positions.setdefault(activity_id, len(collection_positions) + 1)
         group_positions[activity_id] += 1
         by_source[f"json_story_step_{story_asset}"] = {
             "story_group": str(activity_id),
             "story_title": activity_titles.get(activity_id, ""),
             "episode_title": _language_text(language, row[4]),
             "story_order": group_positions[activity_id],
+            "collection_order": collection_positions[activity_id],
         }
 
     annotated = []
@@ -336,6 +365,12 @@ def annotate_activity220_story_lines(lines, language, tables):
                 story_title=metadata["story_title"] or None,
                 episode_title=metadata["episode_title"] or None,
                 story_order=metadata["story_order"] * 1_000 + line.sequence,
+                collection_id=f"reverse1999:character-story:activity220:{metadata['story_group']}",
+                collection_title=(
+                    metadata["story_title"] or f"Character story {metadata['story_group']}"
+                ),
+                collection_kind="character_story",
+                collection_order=metadata["collection_order"],
             )
         )
     return annotated
@@ -368,6 +403,7 @@ def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=Fal
             continue
         story = hero_stories.get(story_id, {})
         plot_groups[group_id] = {
+            "story_id": story_id,
             "story_title": story.get("title") or _language_text(language, row[2], row[3]),
             "episode_title": _language_text(language, row[2], row[3]),
             "character": story.get("character") or _language_text(language, row[7]),
@@ -426,6 +462,18 @@ def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=Fal
                 episode_title=group.get("episode_title") or None,
                 story_order=(group.get("story_order", group_id) * 10_000)
                 + group_positions[group_id],
+                collection_id=(
+                    f"reverse1999:anecdote:hero-story:{group['story_id']}"
+                    if "story_id" in group
+                    else None
+                ),
+                collection_title=(
+                    group.get("story_title") or f"Anecdote {group['story_id']}"
+                    if "story_id" in group
+                    else None
+                ),
+                collection_kind="anecdote" if "story_id" in group else None,
+                collection_order=group.get("story_order") if "story_id" in group else None,
             )
         )
     return add_story_context(lines)
@@ -633,8 +681,55 @@ def write_story_index(lines, output=default_output, *, bundle=None):
         "story_group_counts": dict(
             sorted(Counter(line.story_group for line in lines if line.story_group).items())
         ),
+        "collections": build_story_collections(lines),
     }
-    return write_story_index_document(output, metadata, lines)
+    records = []
+    for line in lines:
+        record = asdict(line)
+        record["source_audio_status"] = source_audio_status_by_extractor_status.get(
+            line.audio_status,
+            "unknown",
+        )
+        record["source_audio_id"] = line.source_voice_id
+        records.append(record)
+    return write_story_index_document(output, metadata, records)
+
+
+def build_story_collections(lines):
+    """Return the game-derived collection catalog referenced by story lines."""
+    by_id = {}
+    for line in lines:
+        if not line.collection_id:
+            continue
+        collection = {
+            "collection_id": line.collection_id,
+            "title": line.collection_title,
+            "kind": line.collection_kind,
+            "order": line.collection_order,
+        }
+        if (
+            not isinstance(collection["title"], str)
+            or not collection["title"].strip()
+            or collection["kind"] not in collection_kind_order
+            or not isinstance(collection["order"], int)
+        ):
+            raise Reverse1999StoryError(
+                f"Incomplete collection metadata for {line.collection_id!r}"
+            )
+        previous = by_id.setdefault(line.collection_id, collection)
+        if previous != collection:
+            raise Reverse1999StoryError(
+                f"Conflicting collection metadata for {line.collection_id!r}"
+            )
+    return sorted(
+        by_id.values(),
+        key=lambda item: (
+            collection_kind_order[item["kind"]],
+            item["order"],
+            item["title"].casefold(),
+            item["collection_id"],
+        ),
+    )
 
 
 def create_parser():
