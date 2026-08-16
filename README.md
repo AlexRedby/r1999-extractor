@@ -39,12 +39,16 @@ accidentally reuse stale generated audio. Queue construction is no longer part
 of extraction bootstrap and remains available only for compatibility while
 generation workflows move to VNTTS.
 
-Compatibility with the released `vntts-artifacts` v0.6.0 APIs is covered by a
+Compatibility with the released `vntts-artifacts` v0.6.1 APIs is covered by a
 synthetic end-to-end fixture. It writes and loads a story index and voice
 manifest, preserves Reverse: 1999 source-audio and collection producer fields,
 exports a complete source-only `vntts.game-pack` document, and reloads it after
-moving the pack directory. The shared contract validates portable relative
-paths and SHA-256 bindings for both manifests and every voice-reference WAV.
+moving the pack directory. The lossless `StoryIndexDocument` API exposes those
+producer fields and typed collections to generic authoring code, while the
+shared canonical source-audio policy can decide whether a line is queued
+without consulting Reverse: 1999 legacy statuses. The shared contract also
+validates portable relative paths and SHA-256 bindings for both manifests and
+every voice-reference WAV.
 
 ## Setup
 

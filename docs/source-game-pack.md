@@ -1,7 +1,7 @@
 # Source game-pack delivery
 
 `r1999-source-pack` exports the extractor-owned boundary through the released
-`vntts-artifacts` v0.6.0 `vntts.game-pack` schema version 1. The delivery is a
+`vntts-artifacts` v0.6.1 `vntts.game-pack` schema version 1. The delivery is a
 new, portable directory with this shape:
 
 ```text
@@ -41,15 +41,32 @@ The extractor intentionally omits the optional `generated_audio` component.
 Synthesis requests, generated speech, cache policy, and final authored packs
 belong to VNTTS rather than the game extractor.
 
-Validate a delivery with the public shared API:
+Validate a delivery and consume its lossless story authoring data with the
+public shared API:
 
 ```python
+from vntts_artifacts import StoryIndexDocument, voice_generation_action
 from vntts_artifacts.game_pack import load_game_pack
 
 pack = load_game_pack("/path/to/source-pack/game-pack.json")
 assert pack.game_id == "reverse1999"
 assert pack.generated_audio is None
+
+story = StoryIndexDocument.load(pack.story_index.path)
+for collection in story.collections:
+    for record in story.records_for_collection(collection.collection_id, speakable_only=True):
+        action = voice_generation_action(
+            record.source_audio_status,
+            unknown_action="resolve_audio",
+        )
+        # `None` means verified source audio is available and no synthesis item
+        # should be created.
 ```
+
+`StoryIndexDocument`, its lossless record/collection types, and canonical
+source-audio queue policy were added in the immutable `vntts-artifacts` v0.6.1
+release. The wire schemas remain version 1, so this is an additive shared API
+upgrade rather than a source-pack format change.
 
 The synthetic compatibility and regression suite additionally moves a completed
 pack and reloads it, checks provenance and component omission, detects a mutated
