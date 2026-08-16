@@ -79,12 +79,12 @@ selection, delivery annotations, emotion prompts, or provider prompt adapters.
 `r1999-bootstrap` produces the Wwise bank index, NPC/reference catalog, story
 index, and source audit, and stops before any generation policy is applied.
 
-The old `r1999-generate`, `r1999-benchmark`, and `r1999-pregenerate` commands
-remain available so existing local generation work is not stranded. Each prints
-a compatibility notice and discovers the relevant legacy artifact locations
-without migrating, deleting, or automatically regenerating them. Blind model
-listening is now owned by VNTTS; existing extractor sessions can be imported and
-resumed without regenerating audio. See
+The old `r1999-generate` and `r1999-pregenerate` commands remain available so
+existing local generation work is not stranded. Each prints a compatibility
+notice and discovers the relevant legacy artifact locations without migrating,
+deleting, or automatically regenerating them. Model benchmarking and blind
+listening are now owned by VNTTS. See
+[`docs/legacy-benchmark-migration.md`](docs/legacy-benchmark-migration.md) and
 [`docs/legacy-listening-migration.md`](docs/legacy-listening-migration.md).
 
 Export a portable source delivery after producing a story index and reviewed
@@ -314,11 +314,24 @@ an internal silent span over 1.2 seconds, or has more than half silent audio
 frames. Rejected attempts remain resumable and never replace an already reviewed
 artifact.
 
-Compare any set of local models on the same emotion-stratified sample:
+Compare local models through the strict VNTTS authoring benchmark. It consumes a
+shared generation queue, renders every variant through the typed synthesis API,
+and publishes checksum-bound model reports:
 
 ```bash
-r1999-benchmark --models /path/to/local-models.json
+cd ../VisualNovelTextToSpeach
+uv run vntts-benchmark-models \
+  --queue /path/to/generation-queue.jsonl \
+  --models /path/to/model-variants.json \
+  --manifest /path/to/voice-manifest.json \
+  --output /path/to/model-benchmark
 ```
+
+The legacy extractor benchmark entry point has been removed. Its configured
+local data contained no external-command model configuration or legacy
+benchmark state to migrate. Historical ad hoc reports and audio remain untouched
+local evidence. See
+[`docs/legacy-benchmark-migration.md`](docs/legacy-benchmark-migration.md).
 
 Blind same-text A/B listening is owned by VNTTS. Inspect and non-destructively
 import an existing extractor session before resuming it:

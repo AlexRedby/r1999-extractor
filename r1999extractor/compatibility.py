@@ -3,7 +3,6 @@ from pathlib import Path
 
 legacy_workflow_descriptions = {
     "r1999-generate": "bulk generation and review",
-    "r1999-benchmark": "voice-model benchmarking",
     "r1999-pregenerate": "MOSS pregeneration jobs",
 }
 

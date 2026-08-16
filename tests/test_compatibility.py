@@ -11,7 +11,6 @@ from unittest.mock import patch
 from r1999extractor import entrypoints
 from r1999extractor.bulk_generation import main as generation_main
 from r1999extractor.compatibility import legacy_workflow_notice
-from r1999extractor.model_benchmark import main as benchmark_main
 
 project_root = Path(__file__).resolve().parents[1]
 
@@ -61,6 +60,7 @@ for module in (
         self.assertFalse(any(value.split("[")[0] == "vntts" for value in dependencies))
         self.assertEqual(document["project"]["optional-dependencies"]["ui"], ["PySide6==6.10.1"])
         self.assertNotIn("r1999-listen", scripts)
+        self.assertNotIn("r1999-benchmark", scripts)
         self.assertEqual(scripts["r1999-audition"], "r1999extractor.entrypoints:audition_main")
 
     def test_notice_discovers_existing_artifacts_without_modifying_them(self):
@@ -88,17 +88,6 @@ for module in (
                 0,
             )
         generation_notice.assert_called_once()
-
-        with (
-            patch("r1999extractor.model_benchmark.legacy_workflow_notice") as benchmark_notice,
-            patch("r1999extractor.model_benchmark.load_provider_config", return_value=[]),
-            patch(
-                "r1999extractor.model_benchmark.benchmark_models",
-                return_value={"models": [], "sample_count": 0},
-            ),
-        ):
-            self.assertEqual(benchmark_main(["--models", "models.json"]), 0)
-        benchmark_notice.assert_called_once()
 
         with (
             patch("r1999extractor.entrypoints.legacy_workflow_notice") as pregeneration_notice,

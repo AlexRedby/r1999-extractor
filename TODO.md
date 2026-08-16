@@ -15,6 +15,5 @@ in project documentation.
 ## Narrow the extractor boundary
 
 - [ ] After VNTTS can import existing jobs, remove generic bulk generation,
-      MOSS generation, model benchmarking, delivery annotation, and
-      pregeneration workbench modules and their command entry points from this
-      package.
+      MOSS generation, delivery annotation, and pregeneration workbench modules
+      and their command entry points from this package.
