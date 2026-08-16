@@ -368,6 +368,10 @@ r1999-audition
 
 Run `--help` on each command for paths and workflow options. The batch, catalog, Wwise, quality-scoring, and audition commands were moved intact from VNTTS so existing local voice-review work can continue here.
 
+Patch 3.7 coverage counts, accepted game-derived identity evidence, checksum
+records, and the procedure for refusing ambiguous role assignments are kept in
+[`docs/source-voice-coverage.md`](docs/source-voice-coverage.md).
+
 ## Tests
 
 ```bash
