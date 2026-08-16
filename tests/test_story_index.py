@@ -121,6 +121,7 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(len(records[1]["text_sha256"]), 64)
         self.assertEqual(records[1]["source_audio_status"], "available")
         self.assertEqual(records[1]["source_audio_id"], "7")
+        self.assertNotIn("collections", records[0])
 
     def test_writes_game_derived_collection_catalog_and_line_membership(self):
         main = annotate_main_story_episode_lines(

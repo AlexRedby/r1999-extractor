@@ -19,6 +19,8 @@ This project knows the Reverse: 1999 formats. VNTTS does not. The integration bo
 
 - `story-index.jsonl`: `vntts.story-index` schema version 1
 - `manifest.json`: the existing generic VNTTS character voice manifest
+- `game-pack.json`: `vntts.game-pack` schema version 1, with portable SHA-256
+  bindings for the story index, voice manifest, and every referenced WAV
 
 The JSONL file starts with one metadata record followed by line records. Each
 line has a stable ID, chapter, sequence, speaker, text, and source information.
@@ -37,13 +39,12 @@ accidentally reuse stale generated audio. Queue construction is no longer part
 of extraction bootstrap and remains available only for compatibility while
 generation workflows move to VNTTS.
 
-Compatibility with the released `vntts-artifacts` v0.5.0 APIs is covered by a
+Compatibility with the released `vntts-artifacts` v0.6.0 APIs is covered by a
 synthetic end-to-end fixture. It writes and loads a story index and voice
 manifest, preserves Reverse: 1999 source-audio and collection producer fields,
-and creates and validates portable relative-path SHA-256 bindings for the story
-index, voice manifest, and source audio. Version 0.5.0 provides those binding
-helpers, not a complete `vntts.game-pack` document API; the extractor does not
-claim or construct an unreleased pack envelope.
+exports a complete source-only `vntts.game-pack` document, and reloads it after
+moving the pack directory. The shared contract validates portable relative
+paths and SHA-256 bindings for both manifests and every voice-reference WAV.
 
 ## Setup
 
@@ -80,6 +81,25 @@ stranded. Each prints a compatibility notice and discovers the relevant legacy
 artifact locations without migrating, deleting, or automatically regenerating
 them. Their queue, job, state, report, and generated-audio formats remain
 extractor-owned until VNTTS ships its legacy-job importer.
+
+Export a portable source delivery after producing a story index and reviewed
+voice manifest:
+
+```bash
+r1999-source-pack \
+  --story-index /path/to/story-index.jsonl \
+  --voice-manifest /path/to/voice-pack/manifest.json \
+  --game-version 3.7 \
+  --output /path/to/reverse1999-3.7-source-pack
+```
+
+The output directory must not already exist. It contains copied source
+artifacts, copied voice-reference WAVs, and a `game-pack.json` with the stable
+game ID, exact supplied game version, extractor name/version, creation time,
+and derived checksums. It deliberately has no `generated_audio` component;
+generated speech and final authoring remain owned by VNTTS. See
+[`docs/source-game-pack.md`](docs/source-game-pack.md) for the contract and
+validation procedure.
 
 ## Extract all story text
 

@@ -44,6 +44,7 @@ r1999-listen = "r1999extractor.model_listening:main"
 r1999-pregenerate = "r1999extractor.entrypoints:pregenerate_main"
 r1999-bootstrap = "r1999extractor.bootstrap:main"
 r1999-update-diff = "r1999extractor.update_diff:main"
+r1999-source-pack = "r1999extractor.source_pack:main"
 
 [tool.setuptools.packages.find]
 include = ["r1999extractor*"]
@@ -56,4 +57,4 @@ line-length = 100
 select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.uv.sources]
-vntts-artifacts = { git = "https://github.com/AlexRedby/vntts-artifacts.git", tag = "v0.5.0" }
+vntts-artifacts = { git = "https://github.com/AlexRedby/vntts-artifacts.git", tag = "v0.6.0" }

@@ -18,9 +18,3 @@ in project documentation.
       MOSS generation, model benchmark/listening, delivery annotation, and
       pregeneration workbench modules and their command entry points from this
       package.
-
-## Versioned VNTTS delivery
-
-- [ ] Export the versioned source artifacts and producer provenance required by
-      the shared contract, including game and extractor versions, story index,
-      voice manifest and references, source-audio facts, and SHA-256 checksums.

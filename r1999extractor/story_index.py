@@ -669,6 +669,7 @@ def build_story_audio_resolver(
 
 def write_story_index(lines, output=default_output, *, bundle=None):
     output = Path(output).expanduser().resolve()
+    collections = build_story_collections(lines)
     metadata = {
         "game": "Reverse: 1999",
         "language": "en",
@@ -681,8 +682,9 @@ def write_story_index(lines, output=default_output, *, bundle=None):
         "story_group_counts": dict(
             sorted(Counter(line.story_group for line in lines if line.story_group).items())
         ),
-        "collections": build_story_collections(lines),
     }
+    if collections:
+        metadata["collections"] = collections
     records = []
     for line in lines:
         record = asdict(line)
