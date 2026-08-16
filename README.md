@@ -20,12 +20,30 @@ This project knows the Reverse: 1999 formats. VNTTS does not. The integration bo
 - `story-index.jsonl`: `vntts.story-index` schema version 1
 - `manifest.json`: the existing generic VNTTS character voice manifest
 
-The JSONL file starts with one metadata record followed by line records. Each line has a stable ID, chapter, sequence, speaker, text, source information, and optional delivery hints.
+The JSONL file starts with one metadata record followed by line records. Each
+line has a stable ID, chapter, sequence, speaker, text, source information, and
+optional delivery hints. The metadata record also contains a `collections`
+catalog for player-visible main-story chapters, anecdotes, and character
+stories. Every catalog entry has a stable game-derived `collection_id`,
+localized `title`, generic `kind`, and display `order`; member lines carry the
+same `collection_id`. These are additive producer fields in schema version 1,
+so existing readers can ignore them while authoring tools avoid reproducing
+Reverse: 1999 chapter arithmetic.
 
-The extractor also emits `generation-queue.jsonl` using
-`vntts.voice-generation-queue` schema version 1. Queue items are pinned to a
-stable line ID and text hash, so text changes cannot accidentally reuse stale
-generated audio.
+The legacy `r1999-generation-queue` command can still emit
+`generation-queue.jsonl` using `vntts.voice-generation-queue` schema version 1.
+Queue items are pinned to a stable line ID and text hash, so text changes cannot
+accidentally reuse stale generated audio. Queue construction is no longer part
+of extraction bootstrap and remains available only for compatibility while
+generation workflows move to VNTTS.
+
+Compatibility with the released `vntts-artifacts` v0.5.0 APIs is covered by a
+synthetic end-to-end fixture. It writes and loads a story index and voice
+manifest, preserves Reverse: 1999 source-audio and collection producer fields,
+and creates and validates portable relative-path SHA-256 bindings for the story
+index, voice manifest, and source audio. Version 0.5.0 provides those binding
+helpers, not a complete `vntts.game-pack` document API; the extractor does not
+claim or construct an unreleased pack envelope.
 
 ## Setup
 
@@ -47,9 +65,10 @@ r1999-bootstrap --game-version installed
 ```
 
 This discovers the installed configs, story bundle, and English Wwise banks,
-then creates the bank index, merged NPC catalog, story index, source audit, and
-generation queue. An optional local `npc-catalog-overlay.json` preserves manual
-name corrections and approved reference decisions without committing them.
+then creates the bank index, merged NPC catalog, story index, and source audit.
+It stops after source artifacts and does not create a synthesis queue. An
+optional local `npc-catalog-overlay.json` preserves manual name corrections and
+approved reference decisions without committing them.
 
 Automatic discovery supports the macOS/iOS-container installation layout and common Windows `ResLib` layouts:
 
@@ -89,11 +108,31 @@ Use `--include-non-speakable` for a preservation-oriented export containing
 localized test, placeholder, and non-English records. Use
 `--skip-audio-resolution` only when a text-only index is sufficient.
 
-## Build the pregeneration queue
+## Compare extracted game updates
+
+Compare two story indexes after installing or extracting a game update:
+
+```bash
+r1999-update-diff old/story-index.jsonl new/story-index.jsonl --output update-diff.json
+```
+
+The command writes stable `r1999.update-diff` schema version 1 JSON and prints a
+concise summary. The report lists new, removed, and changed stable line IDs;
+declared and field-shape schema drift; speaker and canonical voice mapping
+changes; explicit `unresolved` source-audio increases; and changes in source-only
+synthesis eligibility. A line is eligible when it is speakable and does not
+have installed or canonically available original audio. The comparison never
+imports or constructs a generation queue.
+
+## Build a legacy pregeneration queue explicitly
 
 ```bash
 r1999-generation-queue
 ```
+
+This compatibility command is intentionally separate from `r1999-bootstrap`.
+Use it only for existing extractor-owned generation workflows until their jobs
+are importable by VNTTS.
 
 The command reads the story index and includes every speakable line without
 installed source audio. It groups records by canonical voice character and then
@@ -196,8 +235,33 @@ creates a separate resumable local job under the application-data directory.
 The status panel remains usable while MOSS runs and shows generated, pending,
 failed, missing-reference, and skipped sound-effect counts. Previous jobs can
 be selected and resumed from the same window. Source paths and the narrator
-voice are prefilled for the standard sibling VNTTS checkout and remain editable
-for other installations.
+voice are prefilled for the standard sibling VNTTS checkout. Narrator voice is
+chosen from a searchable list of every referenced character in the selected
+voice manifest; **Play reference** auditions the exact prompt clip MOSS will use
+before generation. The selected character is stored in the resumable job, so
+resuming that job preserves the same narrator choice. Previous jobs show their
+saved narrator directly in the status table. Source paths remain editable for
+other installations, and changing the manifest reloads the list.
+
+Generation state includes the line, speaker, phase, attempt number, start time,
+and previous retry error before each blocking provider call. The workbench uses
+that state to keep a live elapsed timer visible during slow MOSS attempts and
+shows the current line instead of relying on counters that may not change while
+an already-failed line is retried. Progress reports processed outcomes together
+with their generated and failed breakdown. Job status distinguishes generation
+owned by the current window, a live external process, and an interrupted stale
+job. Starting or resuming a job clears any exit code retained from its previous
+run.
+
+Pregeneration treats generated WAVs as reviewable artifacts rather than live
+playback cache entries. Each attempt bypasses the VNTTS generated-speech cache,
+renders typed PCM directly without opening an audio output stream, and uses
+successive seeds for retries so a failed waveform is not reproduced. An attempt
+is rejected before publication when MOSS is cancelled, reaches its text-derived
+audio limit without EOS, has leading or trailing silence over 0.8 seconds, has
+an internal silent span over 1.2 seconds, or has more than half silent audio
+frames. Rejected attempts remain resumable and never replace an already reviewed
+artifact.
 
 Compare any set of local models on the same emotion-stratified sample:
 
