@@ -134,6 +134,37 @@ def _load_state(path, queue_sha256):
     return state
 
 
+def _write_active_attempt(
+    state_path,
+    state,
+    item,
+    *,
+    phase,
+    attempt,
+    attempt_limit,
+    total_attempts,
+    seed,
+    started_at,
+    last_error=None,
+):
+    state["active"] = {
+        "queue_id": item["queue_id"],
+        "line_id": item["line_id"],
+        "speaker": item.get("speaker"),
+        "voice_character": item.get("voice_character"),
+        "text": item.get("text"),
+        "phase": phase,
+        "attempt": attempt,
+        "attempt_limit": attempt_limit,
+        "total_attempts": total_attempts,
+        "seed": seed,
+        "started_at": started_at,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "last_error": last_error,
+    }
+    generation_state_codec.write(state_path, state, sort_keys=True)
+
+
 def run_bulk_generation(
     queue_path,
     output_directory,
@@ -195,10 +226,36 @@ def run_bulk_generation(
         while run_attempts <= retries:
             attempts += 1
             run_attempts += 1
+            attempt_seed = int(seed) + attempts - 1
+            attempt_started_at = datetime.now(timezone.utc).isoformat()
             temporary = destination.with_suffix(".partial.wav")
             temporary.unlink(missing_ok=True)
+            _write_active_attempt(
+                state_path,
+                state,
+                item,
+                phase="generating",
+                attempt=run_attempts,
+                attempt_limit=retries + 1,
+                total_attempts=attempts,
+                seed=attempt_seed,
+                started_at=attempt_started_at,
+                last_error=last_error,
+            )
             try:
-                provider.generate(item, temporary, seed=seed)
+                provider.generate(item, temporary, seed=attempt_seed)
+                _write_active_attempt(
+                    state_path,
+                    state,
+                    item,
+                    phase="validating",
+                    attempt=run_attempts,
+                    attempt_limit=retries + 1,
+                    total_attempts=attempts,
+                    seed=attempt_seed,
+                    started_at=attempt_started_at,
+                    last_error=last_error,
+                )
                 quality = inspect_generated_wav(temporary)
                 os.replace(temporary, destination)
                 state["items"][queue_id] = {
@@ -212,10 +269,11 @@ def run_bulk_generation(
                     "provider": provider.provider,
                     "model": provider.model,
                     "prompt_sha256": prompt_sha256,
-                    "seed": seed,
+                    "seed": attempt_seed,
                     "quality": asdict(quality),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
+                state["active"] = None
                 generation_state_codec.write(state_path, state, sort_keys=True)
                 generated += 1
                 break
@@ -225,9 +283,19 @@ def run_bulk_generation(
                 state["items"][queue_id] = {
                     "status": "failed",
                     "attempts": attempts,
+                    "seed": attempt_seed,
                     "last_error": last_error,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
+                if run_attempts <= retries:
+                    state["active"] = {
+                        **state["active"],
+                        "phase": "retrying",
+                        "last_error": last_error,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                else:
+                    state["active"] = None
                 generation_state_codec.write(state_path, state, sort_keys=True)
         if state["items"][queue_id].get("status") == "failed":
             continue

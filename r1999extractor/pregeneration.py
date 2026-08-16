@@ -9,6 +9,7 @@ from platformdirs import user_cache_path, user_data_path
 from vntts_artifacts.atomic_io import atomic_write_json
 from vntts_artifacts.file_integrity import sha256_file
 from vntts_artifacts.text_utils import slugify
+from vntts_artifacts.voice_manifest import VoiceManifestError, load_voice_manifest
 
 from r1999extractor.bulk_generation import (
     BulkGenerationError,
@@ -50,6 +51,14 @@ class PregenerationTarget:
 
 
 @dataclass(frozen=True)
+class NarratorVoiceChoice:
+    character: str
+    speaker: str
+    aliases: tuple[str, ...]
+    references: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
 class GenerationProgress:
     status: str
     generated: int
@@ -64,6 +73,14 @@ class GenerationProgress:
     updated_at: str | None
     rate_per_minute: float | None
     eta_seconds: int | None
+    active_line: str | None
+    active_text: str | None
+    active_speaker: str | None
+    active_phase: str | None
+    active_attempt: int | None
+    active_attempt_limit: int | None
+    active_started_at: str | None
+    active_last_error: str | None
 
 
 def discover_default_story_index(data_directory=None):
@@ -110,6 +127,32 @@ def discover_default_moss_model(*, environment=None, cache_root=None, data_root=
         if (candidate / "config.json").is_file() and (candidate / "model.safetensors").is_file():
             return str(candidate.resolve())
     return default_moss_model_id
+
+
+def load_narrator_voice_choices(manifest_path):
+    manifest_path = Path(manifest_path).expanduser().resolve()
+    try:
+        _document, entries = load_voice_manifest(manifest_path)
+    except VoiceManifestError as error:
+        raise PregenerationError(str(error)) from error
+    return tuple(
+        sorted(
+            (
+                NarratorVoiceChoice(
+                    character=entry.character,
+                    speaker=entry.speaker,
+                    aliases=entry.aliases,
+                    references=tuple(
+                        (manifest_path.parent / reference).resolve()
+                        for reference in entry.references
+                    ),
+                )
+                for entry in entries
+                if entry.references
+            ),
+            key=lambda voice: voice.character.casefold(),
+        )
+    )
 
 
 def _target_descriptor(record):
@@ -377,9 +420,40 @@ def update_job_status(job_directory, status, **fields):
     job = load_pregeneration_job(job_directory)
     job["status"] = status
     job["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if status == "running":
+        fields.setdefault("exit_code", None)
     job.update(fields)
     atomic_write_json(job_directory / "job.json", job, sort_keys=True)
     return job
+
+
+def process_is_alive(pid):
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def resolve_job_runtime_status(job, *, local_running=False, process_checker=process_is_alive):
+    recorded = str(job.get("status") or "ready")
+    if recorded != "running":
+        return recorded
+    if local_running:
+        return "running_here"
+    if process_checker(job.get("pid")):
+        return "running_external"
+    return "interrupted"
 
 
 def _available_voice_names(manifest_path):
@@ -452,10 +526,12 @@ def read_generation_progress(job_directory):
         raise PregenerationError(str(error)) from error
 
     state_path = Path(job["output"]) / "generation-state.json"
+    state_document = {}
     state_items = {}
     if state_path.is_file():
         try:
-            state_items = generation_state_codec.load(state_path).get("items", {})
+            state_document = generation_state_codec.load(state_path)
+            state_items = state_document.get("items", {})
         except Exception as error:
             raise PregenerationError(f"Unable to read generation state: {error}") from error
     relevant = {key: value for key, value in state_items.items() if key in eligible_ids}
@@ -475,12 +551,42 @@ def read_generation_progress(job_directory):
         latest_text = str(source.get("text") or "") or None
         updated_at = str(latest.get("updated_at") or "") or None
 
+    active = state_document.get("active")
+    if not isinstance(active, dict) or active.get("queue_id") not in eligible_ids:
+        active = {}
+    active_line = str(active.get("line_id") or "") or None
+    active_text = str(active.get("text") or "") or None
+    active_speaker = str(
+        active.get("speaker") or active.get("voice_character") or ""
+    ) or None
+    active_phase = str(active.get("phase") or "") or None
+    active_attempt = active.get("attempt")
+    active_attempt_limit = active.get("attempt_limit")
+    active_started_at = str(active.get("started_at") or "") or None
+    active_last_error = str(active.get("last_error") or "") or None
+    if active.get("updated_at"):
+        updated_at = str(active["updated_at"])
+
+    recorded_status = str(job.get("status") or "ready")
+    session_started = None
+    if recorded_status == "running" and job.get("updated_at"):
+        try:
+            session_started = datetime.fromisoformat(job["updated_at"])
+            if session_started.tzinfo is None:
+                session_started = session_started.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            session_started = None
+
     completed_times = []
     for value in relevant.values():
         if value.get("status") not in {"generated", "approved"} or not value.get("updated_at"):
             continue
         try:
-            completed_times.append(datetime.fromisoformat(value["updated_at"]))
+            completed_at = datetime.fromisoformat(value["updated_at"])
+            if completed_at.tzinfo is None:
+                completed_at = completed_at.replace(tzinfo=timezone.utc)
+            if session_started is None or completed_at >= session_started:
+                completed_times.append(completed_at)
         except (TypeError, ValueError):
             continue
     completed_times.sort()
@@ -494,9 +600,8 @@ def read_generation_progress(job_directory):
             if pending and rate_per_minute > 0:
                 eta_seconds = round(pending * 60 / rate_per_minute)
 
-    recorded_status = str(job.get("status") or "ready")
     if generated == len(eligible_ids) and failed == 0:
-        status = "complete"
+        status = "incomplete" if skipped_missing else "complete"
     elif recorded_status == "running":
         status = "running"
     elif failed:
@@ -519,6 +624,14 @@ def read_generation_progress(job_directory):
         updated_at=updated_at,
         rate_per_minute=rate_per_minute,
         eta_seconds=eta_seconds,
+        active_line=active_line,
+        active_text=active_text,
+        active_speaker=active_speaker,
+        active_phase=active_phase,
+        active_attempt=active_attempt,
+        active_attempt_limit=active_attempt_limit,
+        active_started_at=active_started_at,
+        active_last_error=active_last_error,
     )
 
 
@@ -553,6 +666,7 @@ def generation_command(job_directory):
 
 __all__ = [
     "GenerationProgress",
+    "NarratorVoiceChoice",
     "PregenerationError",
     "PregenerationTarget",
     "create_pregeneration_job",
@@ -564,9 +678,11 @@ __all__ = [
     "discover_pregeneration_targets",
     "generation_command",
     "load_pregeneration_job",
+    "load_narrator_voice_choices",
     "read_generation_progress",
     "register_existing_job",
     "records_for_targets",
+    "resolve_job_runtime_status",
     "target_id_for_record",
     "update_job_status",
 ]

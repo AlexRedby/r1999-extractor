@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -14,9 +14,12 @@ from r1999extractor.pregeneration import (
     discover_default_moss_model,
     discover_pregeneration_targets,
     generation_command,
+    load_narrator_voice_choices,
     load_pregeneration_job,
     read_generation_progress,
     register_existing_job,
+    resolve_job_runtime_status,
+    update_job_status,
 )
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -28,6 +31,7 @@ try:
     from r1999extractor.pregeneration_ui import (  # noqa: E402
         PregenerationDialog,
         format_chapter_ids,
+        format_elapsed,
     )
 except ModuleNotFoundError as error:
     if error.name != "PySide6":
@@ -36,6 +40,7 @@ except ModuleNotFoundError as error:
     Qt = None
     PregenerationDialog = None
     format_chapter_ids = None
+    format_elapsed = None
 
 
 def story_line(line_id, chapter, text, *, source_kind="story", title=None, voice="Matilda"):
@@ -70,18 +75,20 @@ def write_story_index(path, records):
     )
 
 
-def write_voice_manifest(path):
+def write_voice_manifest(path, voices=None):
+    voices = voices or [
+        {
+            "character": "Matilda",
+            "speaker": "matilda-test",
+            "references": ["matilda.wav"],
+            "aliases": [],
+        }
+    ]
     path.write_text(
         json.dumps(
             {
                 "version": 2,
-                "voices": [
-                    {
-                        "character": "Matilda",
-                        "references": ["matilda.wav"],
-                        "aliases": [],
-                    }
-                ],
+                "voices": voices,
             }
         ),
         encoding="utf-8",
@@ -89,6 +96,66 @@ def write_voice_manifest(path):
 
 
 class PregenerationTest(unittest.TestCase):
+    def test_resolves_local_external_and_interrupted_runtime_states(self):
+        running = {"status": "running", "pid": 123}
+
+        self.assertEqual(
+            resolve_job_runtime_status(running, local_running=True),
+            "running_here",
+        )
+        self.assertEqual(
+            resolve_job_runtime_status(running, process_checker=lambda _pid: True),
+            "running_external",
+        )
+        self.assertEqual(
+            resolve_job_runtime_status(running, process_checker=lambda _pid: False),
+            "interrupted",
+        )
+        self.assertEqual(
+            resolve_job_runtime_status(
+                {"status": "failed", "pid": 123},
+                process_checker=lambda _pid: True,
+            ),
+            "failed",
+        )
+
+    def test_loads_searchable_narrator_choices_with_resolved_references(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "voices.json"
+            write_voice_manifest(
+                manifest,
+                [
+                    {
+                        "character": "Sonetto",
+                        "speaker": "sonetto-test",
+                        "references": ["references/sonetto.ogg"],
+                        "aliases": ["Sonnetto"],
+                    },
+                    {
+                        "character": "Matilda",
+                        "speaker": "matilda-test",
+                        "references": ["matilda.wav"],
+                        "aliases": [],
+                    },
+                    {
+                        "character": "No Reference",
+                        "speaker": "missing-test",
+                        "references": [],
+                        "aliases": [],
+                    },
+                ],
+            )
+
+            choices = load_narrator_voice_choices(manifest)
+
+        self.assertEqual([choice.character for choice in choices], ["Matilda", "Sonetto"])
+        self.assertEqual(choices[1].aliases, ("Sonnetto",))
+        self.assertEqual(
+            choices[1].references,
+            ((root / "references" / "sonetto.ogg").resolve(),),
+        )
+
     def test_prefers_complete_local_moss_model(self):
         with TemporaryDirectory() as directory:
             cache_root = Path(directory) / "cache"
@@ -248,13 +315,92 @@ class PregenerationTest(unittest.TestCase):
 
             progress = read_generation_progress(job_directory)
 
-        self.assertEqual(progress.status, "complete")
+        self.assertEqual(progress.status, "incomplete")
         self.assertEqual(progress.generated, 1)
         self.assertEqual(progress.eligible, 1)
         self.assertEqual(progress.skipped_missing_voice, 1)
         self.assertEqual(progress.skipped_sound_effects, 1)
         self.assertEqual(progress.missing_voice_names, ("Unknown Guard",))
         self.assertEqual(progress.latest_text, "A spoken line.")
+
+    def test_progress_exposes_the_structured_active_attempt(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story_index = root / "story-index.jsonl"
+            voice_manifest = root / "voices.json"
+            records = [story_line("active", 101301, "A long-running line.")]
+            write_story_index(story_index, records)
+            write_voice_manifest(voice_manifest)
+            targets = discover_pregeneration_targets(records)
+            job_directory = create_pregeneration_job(
+                story_index,
+                targets,
+                (targets[0].target_id,),
+                root / "jobs",
+                voice_manifest=voice_manifest,
+                vntts_python=Path("/test/vntts/python"),
+            )
+            job = load_pregeneration_job(job_directory)
+            _metadata, items = load_generation_queue(job["queue"])
+            queue_item = items[0]
+            output = Path(job["output"])
+            output.mkdir(parents=True)
+            generation_state_codec.write(
+                output / "generation-state.json",
+                generation_state_codec.new(
+                    queue_sha256=sha256_file(job["queue"]),
+                    items={},
+                    active={
+                        "queue_id": queue_item["queue_id"],
+                        "line_id": queue_item["line_id"],
+                        "speaker": "Matilda",
+                        "text": queue_item["text"],
+                        "phase": "generating",
+                        "attempt": 2,
+                        "attempt_limit": 3,
+                        "started_at": "2026-08-16T17:00:00+00:00",
+                        "updated_at": "2026-08-16T17:00:01+00:00",
+                        "last_error": "Earlier attempt reached the audio limit",
+                    },
+                ),
+                sort_keys=True,
+            )
+
+            progress = read_generation_progress(job_directory)
+
+        self.assertEqual(progress.active_line, "active")
+        self.assertEqual(progress.active_text, "A long-running line.")
+        self.assertEqual(progress.active_speaker, "Matilda")
+        self.assertEqual(progress.active_phase, "generating")
+        self.assertEqual(progress.active_attempt, 2)
+        self.assertEqual(progress.active_attempt_limit, 3)
+        self.assertEqual(progress.active_last_error, "Earlier attempt reached the audio limit")
+        self.assertEqual(progress.updated_at, "2026-08-16T17:00:01+00:00")
+
+    def test_restarting_a_job_clears_the_previous_exit_code(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story_index = root / "story-index.jsonl"
+            voice_manifest = root / "voices.json"
+            records = [story_line("ready", 101301, "A spoken line.")]
+            write_story_index(story_index, records)
+            write_voice_manifest(voice_manifest)
+            targets = discover_pregeneration_targets(records)
+            job_directory = create_pregeneration_job(
+                story_index,
+                targets,
+                (targets[0].target_id,),
+                root / "jobs",
+                voice_manifest=voice_manifest,
+                vntts_python=Path("/test/vntts/python"),
+            )
+            update_job_status(job_directory, "failed", exit_code=15, pid=None)
+
+            restarted = update_job_status(job_directory, "running", pid=42)
+
+        self.assertEqual(restarted["status"], "running")
+        self.assertEqual(restarted["pid"], 42)
+        self.assertIsNone(restarted["exit_code"])
 
     def test_registers_an_existing_cli_generation_as_a_visible_job(self):
         with TemporaryDirectory() as directory:
@@ -331,6 +477,7 @@ class PregenerationDialogTest(unittest.TestCase):
                 ],
             )
             write_voice_manifest(voice_manifest)
+            (root / "matilda.wav").write_bytes(b"reference")
             dialog = PregenerationDialog(
                 story_index=story_index,
                 voice_manifest=voice_manifest,
@@ -339,6 +486,9 @@ class PregenerationDialogTest(unittest.TestCase):
             )
 
             self.assertEqual(len(dialog.targets), 2)
+            self.assertEqual(dialog.narrator.count(), 1)
+            self.assertEqual(dialog.selected_narrator_character(), "Matilda")
+            self.assertTrue(dialog.preview_narrator_button.isEnabled())
             self.assertFalse(dialog.start_button.isEnabled())
             item = dialog.target_items["main-story:13"]
             item.setCheckState(0, Qt.CheckState.Checked)
@@ -353,6 +503,16 @@ class PregenerationDialogTest(unittest.TestCase):
             format_chapter_ids(("101201", "101202", "101203", "101204"), per_line=3),
             "101201, 101202, 101203\n101204",
         )
+
+    def test_formats_active_attempt_elapsed_time(self):
+        started = datetime(2026, 8, 16, 17, 0, 0, tzinfo=timezone.utc)
+
+        elapsed = format_elapsed(
+            started.isoformat(),
+            now=started + timedelta(minutes=2, seconds=7),
+        )
+
+        self.assertEqual(elapsed, "2m 07s")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,14 @@
 import argparse
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer
+from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer, QUrl
 from PySide6.QtGui import QTextCursor
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QFileDialog,
     QGridLayout,
@@ -39,18 +42,24 @@ from r1999extractor.pregeneration import (
     discover_jobs,
     discover_pregeneration_targets,
     generation_command,
+    load_narrator_voice_choices,
     load_pregeneration_job,
     read_generation_progress,
+    resolve_job_runtime_status,
     update_job_status,
 )
 
 status_labels = {
     "ready": "Ready",
     "running": "Generating",
+    "running_here": "Generating here",
+    "running_external": "Generating externally",
+    "interrupted": "Interrupted",
     "paused": "Ready to resume",
     "stopped": "Stopped",
     "failed": "Needs attention",
     "complete": "Complete",
+    "incomplete": "Incomplete - missing voices",
 }
 
 
@@ -62,6 +71,26 @@ def format_duration(seconds):
     if hours:
         return f"{hours}h"
     return f"{minutes}m"
+
+
+def format_elapsed(timestamp, *, now=None):
+    if not timestamp:
+        return None
+    try:
+        started = datetime.fromisoformat(timestamp)
+    except (TypeError, ValueError):
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    seconds = max(0, round((now - started).total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
 
 
 def format_chapter_ids(chapters, per_line=5):
@@ -94,9 +123,24 @@ class PregenerationDialog(QDialog):
 
         self.story_index = QLineEdit(str(story_index or discover_default_story_index()))
         self.voice_manifest = QLineEdit(str(voice_manifest or discover_default_voice_manifest()))
+        self.voice_manifest.editingFinished.connect(self.reload_narrator_voices)
         self.vntts_python = QLineEdit(str(vntts_python or discover_default_vntts_python()))
         self.model = QLineEdit(str(model or discover_default_moss_model()))
-        self.narrator = QLineEdit(narrator_character)
+        self.narrator = QComboBox()
+        self.narrator.setEditable(True)
+        self.narrator.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.narrator.setMinimumContentsLength(24)
+        self.narrator.completer().setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.narrator.completer().setFilterMode(Qt.MatchFlag.MatchContains)
+        self.narrator_voice_status = QLabel()
+        self.narrator_voice_status.setWordWrap(True)
+        self.narrator_voice_status.setStyleSheet("color: #6b7280;")
+        self.preview_narrator_button = QPushButton("Play reference")
+        self.preview_narrator_button.clicked.connect(self.preview_narrator_voice)
+        self.narrator.currentIndexChanged.connect(self.narrator_voice_changed)
+        self.narrator_player = QMediaPlayer(self)
+        self.narrator_audio_output = QAudioOutput(self)
+        self.narrator_player.setAudioOutput(self.narrator_audio_output)
         self.story_index.setToolTip("Latest extracted story index used to discover chapters")
         self.voice_manifest.setToolTip("VNTTS character voice manifest")
         self.vntts_python.setToolTip("Python from the VNTTS environment with MOSS installed")
@@ -125,10 +169,14 @@ class PregenerationDialog(QDialog):
         model_browse.clicked.connect(self.browse_model)
         settings_grid.addWidget(model_browse, 3, 2)
         settings_grid.addWidget(QLabel("Narrator voice"), 4, 0)
-        settings_grid.addWidget(self.narrator, 4, 1)
+        narrator_row = QHBoxLayout()
+        narrator_row.addWidget(self.narrator, 1)
+        narrator_row.addWidget(self.preview_narrator_button)
+        settings_grid.addLayout(narrator_row, 4, 1)
         reload_button = QPushButton("Reload stories")
         reload_button.clicked.connect(self.reload_targets)
         settings_grid.addWidget(reload_button, 4, 2)
+        settings_grid.addWidget(self.narrator_voice_status, 5, 1)
         settings_grid.setColumnStretch(1, 1)
 
         selection_panel = QWidget()
@@ -203,8 +251,10 @@ class PregenerationDialog(QDialog):
         actions.addWidget(refresh_jobs)
         status_layout.addLayout(actions)
 
-        self.job_table = QTableWidget(0, 4)
-        self.job_table.setHorizontalHeaderLabels(["Started", "Stories", "Progress", "Status"])
+        self.job_table = QTableWidget(0, 5)
+        self.job_table.setHorizontalHeaderLabels(
+            ["Started", "Stories", "Narrator", "Progress", "Status"]
+        )
         self.job_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.job_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.job_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -212,12 +262,10 @@ class PregenerationDialog(QDialog):
             0, QHeaderView.ResizeMode.ResizeToContents
         )
         self.job_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.job_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.job_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.ResizeToContents
-        )
+        for column in range(2, 5):
+            self.job_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
         self.job_table.itemSelectionChanged.connect(self.job_selected)
         status_layout.addWidget(QLabel("Previous jobs"))
         status_layout.addWidget(self.job_table, 1)
@@ -242,6 +290,7 @@ class PregenerationDialog(QDialog):
         self.timer.setInterval(1500)
         self.timer.timeout.connect(self.poll_status)
         self.timer.start()
+        self.reload_narrator_voices(preferred=narrator_character)
         self.reload_targets()
         self.refresh_jobs()
 
@@ -259,6 +308,7 @@ class PregenerationDialog(QDialog):
         )
         if path:
             self.voice_manifest.setText(path)
+            self.reload_narrator_voices()
 
     def browse_vntts_python(self):
         path, _filter = QFileDialog.getOpenFileName(
@@ -271,6 +321,75 @@ class PregenerationDialog(QDialog):
         path = QFileDialog.getExistingDirectory(self, "Select local MOSS model", self.model.text())
         if path:
             self.model.setText(path)
+
+    def reload_narrator_voices(self, *, preferred=None):
+        preferred = preferred or self.selected_narrator_character()
+        try:
+            voices = load_narrator_voice_choices(self.voice_manifest.text())
+        except PregenerationError as error:
+            self.narrator.clear()
+            self.narrator_voice_status.setText(str(error))
+            self.preview_narrator_button.setEnabled(False)
+            return
+
+        self.narrator.blockSignals(True)
+        self.narrator.clear()
+        selected_index = -1
+        for index, voice in enumerate(voices):
+            self.narrator.addItem(voice.character, voice)
+            reference_label = "reference" if len(voice.references) == 1 else "references"
+            self.narrator.setItemData(
+                index,
+                f"{voice.speaker}; {len(voice.references)} {reference_label}",
+                Qt.ItemDataRole.ToolTipRole,
+            )
+            if preferred and voice.character.casefold() == preferred.casefold():
+                selected_index = index
+        if selected_index < 0 and voices and not preferred:
+            selected_index = 0
+        self.narrator.setCurrentIndex(selected_index)
+        if selected_index < 0 and preferred:
+            self.narrator.setEditText(preferred)
+        self.narrator.blockSignals(False)
+        self.narrator_voice_changed()
+
+    def selected_narrator_character(self):
+        voice = self.narrator.currentData()
+        if voice is not None:
+            return voice.character
+        return self.narrator.currentText().strip()
+
+    def narrator_voice_changed(self, *_args):
+        voice = self.narrator.currentData()
+        if voice is None:
+            self.narrator_voice_status.setText("Choose a voice from the manifest list.")
+            self.preview_narrator_button.setEnabled(False)
+            return
+        prompt = voice.references[0]
+        prompt_status = "available" if prompt.is_file() else "missing"
+        total = len(voice.references)
+        self.narrator_voice_status.setText(
+            f"Generation prompt: {prompt.name} ({prompt_status}); {total} reference clips. "
+            "This voice will be saved in the job."
+        )
+        self.preview_narrator_button.setEnabled(prompt.is_file())
+
+    def preview_narrator_voice(self):
+        voice = self.narrator.currentData()
+        if voice is None:
+            self.show_error("Narrator voice", "Choose a voice from the manifest list first.")
+            return
+        reference = voice.references[0]
+        if not reference.is_file():
+            self.show_error(
+                "Narrator voice",
+                f"No local reference clips are available for {voice.character}.",
+            )
+            return
+        self.narrator_player.stop()
+        self.narrator_player.setSource(QUrl.fromLocalFile(str(reference)))
+        self.narrator_player.play()
+        self.narrator_voice_status.setText(f"Playing {voice.character}: {reference.name}")
 
     def reload_targets(self):
         try:
@@ -384,8 +503,13 @@ class PregenerationDialog(QDialog):
         missing = [label for value, label in checks if not Path(value).expanduser().is_file()]
         if missing:
             raise PregenerationError("Missing required file(s): " + ", ".join(missing))
-        if not self.narrator.text().strip():
-            raise PregenerationError("Narrator voice cannot be empty")
+        narrator = self.narrator.currentData()
+        if narrator is None:
+            raise PregenerationError("Choose a narrator voice from the manifest list")
+        if not narrator.references[0].is_file():
+            raise PregenerationError(
+                f"Narrator voice {narrator.character!r} has no local reference recording"
+            )
         model = self.model.text().strip()
         if not model:
             raise PregenerationError("MOSS model cannot be empty")
@@ -403,7 +527,7 @@ class PregenerationDialog(QDialog):
                 voice_manifest=self.voice_manifest.text(),
                 vntts_python=self.vntts_python.text(),
                 model=self.model.text().strip(),
-                narrator_character=self.narrator.text().strip(),
+                narrator_character=self.selected_narrator_character(),
             )
             self.refresh_jobs(select_job=job_directory)
             self.launch_job(job_directory)
@@ -450,6 +574,7 @@ class PregenerationDialog(QDialog):
                 self.current_job,
                 "running",
                 pid=int(self.process.processId()),
+                exit_code=None,
             )
         self.update_controls()
         self.poll_status()
@@ -467,9 +592,10 @@ class PregenerationDialog(QDialog):
         if self.current_job is not None:
             try:
                 progress = read_generation_progress(self.current_job)
-                final_status = (
-                    "complete" if progress.pending == 0 and progress.failed == 0 else "stopped"
-                )
+                if progress.pending == 0 and progress.failed == 0:
+                    final_status = "incomplete" if progress.skipped_missing_voice else "complete"
+                else:
+                    final_status = "stopped"
                 if exit_code != 0:
                     final_status = "failed"
                 update_job_status(
@@ -509,14 +635,24 @@ class PregenerationDialog(QDialog):
             try:
                 job = load_pregeneration_job(directory)
                 progress = read_generation_progress(directory)
+                local_running = (
+                    self.process_is_running()
+                    and self.current_job is not None
+                    and directory.resolve() == self.current_job.resolve()
+                )
+                runtime_status = resolve_job_runtime_status(
+                    job,
+                    local_running=local_running,
+                )
                 values = (
                     directory.name[:15],
                     job.get("title", directory.name),
+                    job.get("narrator_character", "Matilda"),
                     f"{progress.generated}/{progress.eligible}",
-                    status_labels.get(progress.status, progress.status.title()),
+                    status_labels.get(runtime_status, runtime_status.title()),
                 )
             except PregenerationError as error:
-                values = (directory.name[:15], directory.name, "-", "Invalid")
+                values = (directory.name[:15], directory.name, "-", "-", "Invalid")
                 self.log.appendPlainText(str(error))
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
@@ -559,28 +695,50 @@ class PregenerationDialog(QDialog):
         except PregenerationError as error:
             self.progress_details.setText(str(error))
             return
-        self.current_title.setText(job.get("title", self.current_job.name))
+        title = job.get("title", self.current_job.name)
+        narrator = job.get("narrator_character", "Matilda")
+        self.current_title.setText(f"{title} - Narrator: {narrator}")
+        runtime_status = resolve_job_runtime_status(
+            job,
+            local_running=self.process_is_running(),
+        )
         maximum = max(1, progress.eligible)
         self.progress.setRange(0, maximum)
-        self.progress.setValue(progress.generated)
+        processed = progress.generated + progress.failed
+        self.progress.setValue(processed)
         if progress.eligible == 0:
             self.progress.setFormat("No lines can be generated")
         else:
-            self.progress.setFormat("%v / %m generated (%p%)")
-        label = status_labels.get(progress.status, progress.status.title()).upper()
+            self.progress.setFormat(
+                f"%v / %m processed - {progress.generated:,} generated, "
+                f"{progress.failed:,} failed"
+            )
+        label = status_labels.get(runtime_status, runtime_status.title()).upper()
+        if runtime_status in {"running_here", "running_external"} and progress.active_phase:
+            activity = progress.active_phase.replace("_", " ").upper()
+            if progress.active_attempt and progress.active_attempt_limit:
+                activity += f" - ATTEMPT {progress.active_attempt}/{progress.active_attempt_limit}"
+            elapsed = format_elapsed(progress.active_started_at)
+            if elapsed:
+                activity += f" - {elapsed}"
+            label += f" - {activity}"
         self.status_badge.setText(label)
         color = {
             "running": "#2563eb",
+            "running_here": "#2563eb",
+            "running_external": "#0369a1",
+            "interrupted": "#b91c1c",
             "complete": "#15803d",
+            "incomplete": "#a16207",
             "failed": "#b91c1c",
             "paused": "#a16207",
             "stopped": "#a16207",
-        }.get(progress.status, "#52525b")
+        }.get(runtime_status, "#52525b")
         self.status_badge.setStyleSheet(
             f"background: {color}; color: white; border-radius: 6px; font-weight: 700;"
         )
         details = [f"{progress.pending:,} pending", f"{progress.failed:,} failed"]
-        if progress.status == "running" and progress.generated == 0:
+        if runtime_status in {"running_here", "running_external"} and progress.generated == 0:
             model = str(job.get("model") or "")
             phase = (
                 "Loading the local MOSS model"
@@ -603,16 +761,28 @@ class PregenerationDialog(QDialog):
             )
         else:
             self.progress_details.setToolTip("")
-        if progress.latest_line:
+        if progress.active_line:
+            current = f"Current: {progress.active_line}"
+            if progress.active_speaker:
+                current += f" - {progress.active_speaker}"
+            if progress.active_text:
+                current += f"\n{progress.active_text}"
+            if progress.active_last_error and progress.active_phase == "retrying":
+                current += f"\nRetry reason: {progress.active_last_error}"
+            self.latest_line.setText(current)
+        elif progress.latest_line:
             latest = f"Latest: {progress.latest_line}"
             if progress.latest_text:
                 latest += f"\n{progress.latest_text}"
             self.latest_line.setText(latest)
         else:
             model = str(job.get("model") or "")
-            if progress.status == "running" and Path(model).expanduser().is_absolute():
+            if (
+                runtime_status in {"running_here", "running_external"}
+                and Path(model).expanduser().is_absolute()
+            ):
                 self.latest_line.setText(f"Loading local model:\n{model}")
-            elif progress.status == "running":
+            elif runtime_status in {"running_here", "running_external"}:
                 self.latest_line.setText(
                     "The model may be downloading. Generation starts after it is loaded."
                 )
@@ -629,9 +799,18 @@ class PregenerationDialog(QDialog):
             item = self.job_table.item(row, 0)
             if item is None or item.data(Qt.ItemDataRole.UserRole) != wanted:
                 continue
-            self.job_table.item(row, 2).setText(f"{progress.generated}/{progress.eligible}")
-            self.job_table.item(row, 3).setText(
-                status_labels.get(progress.status, progress.status.title())
+            job = load_pregeneration_job(job_directory)
+            runtime_status = resolve_job_runtime_status(
+                job,
+                local_running=(
+                    self.process_is_running()
+                    and self.current_job is not None
+                    and Path(job_directory).resolve() == self.current_job.resolve()
+                ),
+            )
+            self.job_table.item(row, 3).setText(f"{progress.generated}/{progress.eligible}")
+            self.job_table.item(row, 4).setText(
+                status_labels.get(runtime_status, runtime_status.title())
             )
             break
 
@@ -644,11 +823,20 @@ class PregenerationDialog(QDialog):
                 progress = read_generation_progress(self.current_job)
             except PregenerationError:
                 progress = None
+        runtime_status = None
+        if self.current_job is not None:
+            try:
+                runtime_status = resolve_job_runtime_status(
+                    load_pregeneration_job(self.current_job),
+                    local_running=running,
+                )
+            except PregenerationError:
+                runtime_status = None
         can_resume = (
             self.selected_job_directory() is not None
             and not running
             and progress is not None
-            and progress.status != "running"
+            and runtime_status not in {"running_here", "running_external"}
             and (progress.pending > 0 or progress.failed > 0)
         )
         self.resume_button.setEnabled(can_resume)

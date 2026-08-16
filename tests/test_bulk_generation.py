@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from vntts_artifacts.generated_audio import load_generated_audio_manifest
 
 from r1999extractor.bulk_generation import (
+    BulkGenerationError,
     generation_state_codec,
     review_item,
     run_bulk_generation,
@@ -28,6 +29,31 @@ class SyntheticProvider:
         write_test_wav(output, frequency=220 + seed)
 
 
+class RetryProvider(SyntheticProvider):
+    def __init__(self, failures):
+        super().__init__()
+        self.failures = failures
+        self.seeds = []
+
+    def generate(self, item, output, *, seed):
+        self.calls += 1
+        self.seeds.append(seed)
+        if self.calls <= self.failures:
+            raise BulkGenerationError("Synthetic retry")
+        write_test_wav(output, frequency=220 + seed)
+
+
+class StateInspectingProvider(SyntheticProvider):
+    def __init__(self, state_path):
+        super().__init__()
+        self.state_path = Path(state_path)
+        self.observed_active = None
+
+    def generate(self, item, output, *, seed):
+        self.observed_active = generation_state_codec.load(self.state_path).get("active")
+        super().generate(item, output, seed=seed)
+
+
 def write_test_wav(path, *, frequency):
     sample_rate = 16000
     samples = [
@@ -42,6 +68,86 @@ def write_test_wav(path, *, frequency):
 
 
 class BulkGenerationTest(unittest.TestCase):
+    def test_persists_active_attempt_before_the_provider_blocks(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            queue = root / "queue.jsonl"
+            text = "Expose this attempt in the workbench."
+            text_hash = hashlib.sha256(text.encode()).hexdigest()
+            metadata = {
+                "record_type": "metadata",
+                "schema": "vntts.voice-generation-queue",
+                "schema_version": 1,
+                "game": "Synthetic Game",
+                "language": "en",
+                "item_count": 1,
+            }
+            item = {
+                "record_type": "generation_item",
+                "queue_id": "active:1:" + text_hash[:16],
+                "line_id": "active:1",
+                "text_sha256": text_hash,
+                "speaker": "Test Hero",
+                "voice_character": "Test Hero",
+                "text": text,
+                "action": "generate",
+            }
+            queue.write_text(json.dumps(metadata) + "\n" + json.dumps(item) + "\n")
+            output = root / "output"
+            provider = StateInspectingProvider(output / "generation-state.json")
+
+            result = run_bulk_generation(queue, output, provider, retries=2, seed=7)
+            final_state = generation_state_codec.load(result["state"])
+
+        self.assertEqual(provider.observed_active["queue_id"], item["queue_id"])
+        self.assertEqual(provider.observed_active["line_id"], "active:1")
+        self.assertEqual(provider.observed_active["speaker"], "Test Hero")
+        self.assertEqual(provider.observed_active["phase"], "generating")
+        self.assertEqual(provider.observed_active["attempt"], 1)
+        self.assertEqual(provider.observed_active["attempt_limit"], 3)
+        self.assertEqual(provider.observed_active["seed"], 7)
+        self.assertIsNone(final_state["active"])
+
+    def test_retries_with_a_new_seed_and_records_the_successful_seed(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            queue = root / "queue.jsonl"
+            text = "Retry with another seed."
+            text_hash = hashlib.sha256(text.encode()).hexdigest()
+            metadata = {
+                "record_type": "metadata",
+                "schema": "vntts.voice-generation-queue",
+                "schema_version": 1,
+                "game": "Synthetic Game",
+                "language": "en",
+                "item_count": 1,
+            }
+            item = {
+                "record_type": "generation_item",
+                "queue_id": "retry-seed:1:" + text_hash[:16],
+                "line_id": "retry-seed:1",
+                "text_sha256": text_hash,
+                "speaker": "Test Hero",
+                "voice_character": "Test Hero",
+                "text": text,
+                "action": "generate",
+            }
+            queue.write_text(json.dumps(metadata) + "\n" + json.dumps(item) + "\n")
+            provider = RetryProvider(failures=2)
+
+            result = run_bulk_generation(
+                queue,
+                root / "output",
+                provider,
+                retries=2,
+                seed=7,
+            )
+            state = generation_state_codec.load(result["state"])
+
+        self.assertEqual(provider.seeds, [7, 8, 9])
+        self.assertEqual(state["items"][item["queue_id"]]["seed"], 9)
+        self.assertEqual(state["items"][item["queue_id"]]["attempts"], 3)
+
     def test_generates_resumably_and_publishes_exact_manifest(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
