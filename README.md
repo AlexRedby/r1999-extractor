@@ -79,12 +79,13 @@ selection, delivery annotations, emotion prompts, or provider prompt adapters.
 `r1999-bootstrap` produces the Wwise bank index, NPC/reference catalog, story
 index, and source audit, and stops before any generation policy is applied.
 
-The old `r1999-generate`, `r1999-benchmark`, `r1999-listen`, and
-`r1999-pregenerate` commands remain available so existing local work is not
-stranded. Each prints a compatibility notice and discovers the relevant legacy
-artifact locations without migrating, deleting, or automatically regenerating
-them. Their queue, job, state, report, and generated-audio formats remain
-extractor-owned until VNTTS ships its legacy-job importer.
+The old `r1999-generate`, `r1999-benchmark`, and `r1999-pregenerate` commands
+remain available so existing local generation work is not stranded. Each prints
+a compatibility notice and discovers the relevant legacy artifact locations
+without migrating, deleting, or automatically regenerating them. Blind model
+listening is now owned by VNTTS; existing extractor sessions can be imported and
+resumed without regenerating audio. See
+[`docs/legacy-listening-migration.md`](docs/legacy-listening-migration.md).
 
 Export a portable source delivery after producing a story index and reviewed
 voice manifest:
@@ -319,21 +320,24 @@ Compare any set of local models on the same emotion-stratified sample:
 r1999-benchmark --models /path/to/local-models.json
 ```
 
-Create a blind same-text A/B listening session after generation, then reopen the
-UI at any time to resume it:
+Blind same-text A/B listening is owned by VNTTS. Inspect and non-destructively
+import an existing extractor session before resuming it:
 
 ```bash
-r1999-listen start --benchmark /path/to/model-benchmark/benchmark-report.json
-r1999-listen ui
-r1999-listen status
-r1999-listen report
+cd ../VisualNovelTextToSpeach
+uv run vntts-pregenerate inspect-listening /path/to/listening-session
+uv run vntts-pregenerate import-listening /path/to/listening-session
+uv run vntts-listen ui --session /path/from-import-json/session.json
 ```
 
-Existing same-text per-model reports can be reused without regenerating audio:
+For a new comparison, existing same-text per-model reports can still be reused
+without regenerating audio:
 
 ```bash
-r1999-listen start-reports --reports /path/to/model-a.json /path/to/model-b.json
-r1999-listen ui
+uv run vntts-listen start-reports \
+  --reports /path/to/model-a.json /path/to/model-b.json \
+  --output /path/to/listening-session
+uv run vntts-listen ui --session /path/to/listening-session/session.json
 ```
 
 The workbench randomizes trial and A/B order, exposes only neutral audio aliases,
@@ -342,6 +346,9 @@ subjective numeric scales and specialist labels such as timbre or accent. The
 model key is stored separately in `.blind-key.json`; the aggregate preference
 report is unblinded and still requires an explicit human production-model
 decision. Model configuration and generated samples stay local.
+
+The migration contract and checksum-preserving resume procedure are documented
+in [`docs/legacy-listening-migration.md`](docs/legacy-listening-migration.md).
 
 ### Production model decision
 

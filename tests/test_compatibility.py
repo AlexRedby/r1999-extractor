@@ -12,7 +12,6 @@ from r1999extractor import entrypoints
 from r1999extractor.bulk_generation import main as generation_main
 from r1999extractor.compatibility import legacy_workflow_notice
 from r1999extractor.model_benchmark import main as benchmark_main
-from r1999extractor.model_listening import main as listening_main
 
 project_root = Path(__file__).resolve().parents[1]
 
@@ -56,10 +55,13 @@ for module in (
     def test_base_dependencies_exclude_qt_and_vntts_speech_runtime(self):
         document = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
         dependencies = tuple(value.casefold() for value in document["project"]["dependencies"])
+        scripts = document["project"]["scripts"]
 
         self.assertFalse(any("pyside" in value for value in dependencies))
         self.assertFalse(any(value.split("[")[0] == "vntts" for value in dependencies))
         self.assertEqual(document["project"]["optional-dependencies"]["ui"], ["PySide6==6.10.1"])
+        self.assertNotIn("r1999-listen", scripts)
+        self.assertEqual(scripts["r1999-audition"], "r1999extractor.entrypoints:audition_main")
 
     def test_notice_discovers_existing_artifacts_without_modifying_them(self):
         with TemporaryDirectory() as directory:
@@ -97,14 +99,6 @@ for module in (
         ):
             self.assertEqual(benchmark_main(["--models", "models.json"]), 0)
         benchmark_notice.assert_called_once()
-
-        with (
-            patch("r1999extractor.model_listening.legacy_workflow_notice") as listening_notice,
-            patch("r1999extractor.model_listening.load_listening_session", return_value={}),
-            patch("r1999extractor.model_listening.listening_progress", return_value=(0, 0)),
-        ):
-            self.assertEqual(listening_main(["status", "--session", "session.json"]), 0)
-        listening_notice.assert_called_once()
 
         with (
             patch("r1999extractor.entrypoints.legacy_workflow_notice") as pregeneration_notice,
