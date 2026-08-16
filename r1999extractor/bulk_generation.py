@@ -19,6 +19,7 @@ from vntts_artifacts.generated_audio import write_generated_audio_manifest
 from vntts_artifacts.text_utils import slugify
 
 from r1999extractor.cli import cli_error, cli_success
+from r1999extractor.compatibility import legacy_workflow_notice
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.versioned_json import VersionedJSONCodec, VersionedJSONError
 
@@ -393,6 +394,10 @@ def create_parser():
 
 def main(arguments=None):
     options = create_parser().parse_args(arguments)
+    artifact_paths = (
+        (options.state,) if options.command == "review" else (options.queue, options.output)
+    )
+    legacy_workflow_notice("r1999-generate", artifact_paths)
     try:
         if options.command == "review":
             review_item(options.state, options.queue_id, options.decision)

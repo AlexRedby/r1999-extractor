@@ -10,6 +10,7 @@ from r1999extractor.bulk_generation import (
     run_bulk_generation,
 )
 from r1999extractor.cli import cli_error
+from r1999extractor.compatibility import legacy_workflow_notice
 from r1999extractor.generation_queue import default_output as default_queue
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.versioned_json import VersionedJSONCodec
@@ -144,6 +145,7 @@ def create_parser():
 
 def main(arguments=None):
     options = create_parser().parse_args(arguments)
+    legacy_workflow_notice("r1999-benchmark", (options.queue, options.output))
     try:
         providers = load_provider_config(options.models)
         report = benchmark_models(

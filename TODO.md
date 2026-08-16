@@ -14,21 +14,10 @@ in project documentation.
 
 ## Narrow the extractor boundary
 
-- [ ] Keep only source facts in extracted artifacts: speaker identity, story
-      structure, original-audio status and reason, source provenance, and
-      reviewed voice references. Remove model prompts and generation actions
-      from extractor-owned output.
 - [ ] After VNTTS can import existing jobs, remove generic bulk generation,
       MOSS generation, model benchmark/listening, delivery annotation, and
       pregeneration workbench modules and their command entry points from this
       package.
-- [ ] Provide a non-destructive migration or compatibility message for the old
-      `r1999-generate`, `r1999-benchmark`, `r1999-listen`, and
-      `r1999-pregenerate` commands until existing local jobs are discoverable in
-      VNTTS.
-- [ ] Verify that a headless extractor installation no longer requires a VNTTS
-      Python environment, speech model runtime, or playback abstraction; retain
-      Qt only as an optional dependency for source-reference audition.
 
 ## Versioned VNTTS delivery
 

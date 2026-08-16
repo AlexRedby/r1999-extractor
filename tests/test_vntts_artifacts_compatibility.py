@@ -92,6 +92,18 @@ class VnttsArtifactsCompatibilityTest(unittest.TestCase):
         self.assertEqual(raw_line["source_bank"], "synthetic.bnk")
         self.assertEqual(raw_line["source_media_ids"], [7])
         self.assertEqual(raw_line["collection_id"], line.collection_id)
+        self.assertTrue(
+            {
+                "action",
+                "delivery",
+                "emotion",
+                "model",
+                "prompt_adapters",
+                "provider",
+                "retries",
+                "seed",
+            }.isdisjoint(raw_line)
+        )
         self.assertEqual(voices[0].references, ("source-audio/voice-7.ogg",))
         self.assertEqual(bindings["source_audio"]["path"], "source-audio/voice-7.ogg")
         self.assertEqual(

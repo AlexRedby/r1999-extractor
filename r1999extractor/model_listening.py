@@ -18,6 +18,7 @@ from r1999extractor.bulk_generation import (
     load_generation_queue,
 )
 from r1999extractor.cli import cli_error, cli_success
+from r1999extractor.compatibility import legacy_workflow_notice
 from r1999extractor.model_benchmark import benchmark_codec, default_output
 from r1999extractor.versioned_json import VersionedJSONCodec, VersionedJSONError
 
@@ -591,6 +592,14 @@ def create_parser():
 
 def main(arguments=None):
     options = create_parser().parse_args(arguments)
+    legacy_workflow_notice(
+        "r1999-listen",
+        tuple(
+            getattr(options, name)
+            for name in ("benchmark", "reports", "output", "session")
+            if getattr(options, name, None) is not None
+        ),
+    )
     try:
         if options.command == "start":
             path = create_listening_session(options.benchmark, options.output, seed=options.seed)

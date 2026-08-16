@@ -21,8 +21,8 @@ This project knows the Reverse: 1999 formats. VNTTS does not. The integration bo
 - `manifest.json`: the existing generic VNTTS character voice manifest
 
 The JSONL file starts with one metadata record followed by line records. Each
-line has a stable ID, chapter, sequence, speaker, text, source information, and
-optional delivery hints. The metadata record also contains a `collections`
+line has a stable ID, chapter, sequence, speaker, text, and source information.
+The metadata record also contains a `collections`
 catalog for player-visible main-story chapters, anecdotes, and character
 stories. Every catalog entry has a stable game-derived `collection_id`,
 localized `title`, generic `kind`, and display `order`; member lines carry the
@@ -48,12 +48,38 @@ claim or construct an unreleased pack envelope.
 ## Setup
 
 ```bash
+uv sync --group dev
+```
+
+This creates the locked headless/source-only environment. It does not install or
+import the VNTTS speech runtime, speech models, a playback abstraction, or Qt.
+Run project commands through `uv run`, for example `uv run r1999-bootstrap`.
+
+Install Qt only for local source-reference audition and legacy graphical tools:
+
+```bash
 uv sync --group dev --extra ui
 ```
 
-This creates a locked local environment with the optional Qt audition UI. For
-headless extraction and core tests only, omit `--extra ui`. Run project commands
-through `uv run`, for example `uv run r1999-bootstrap`.
+The `r1999-audition` and legacy `r1999-pregenerate` entry points load Qt lazily
+and explain the optional extra when it is absent. Source extraction remains
+usable without it.
+
+## Source-only artifact boundary
+
+Source-owned outputs contain game facts only: story structure and text, speaker
+identity, original-audio status and provenance, collection metadata, and
+reviewed voice references. They do not contain synthesis actions, model or seed
+selection, delivery annotations, emotion prompts, or provider prompt adapters.
+`r1999-bootstrap` produces the Wwise bank index, NPC/reference catalog, story
+index, and source audit, and stops before any generation policy is applied.
+
+The old `r1999-generate`, `r1999-benchmark`, `r1999-listen`, and
+`r1999-pregenerate` commands remain available so existing local work is not
+stranded. Each prints a compatibility notice and discovers the relevant legacy
+artifact locations without migrating, deleting, or automatically regenerating
+them. Their queue, job, state, report, and generated-audio formats remain
+extractor-owned until VNTTS ships its legacy-job importer.
 
 ## Extract all story text
 
