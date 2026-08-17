@@ -181,12 +181,13 @@ without downloading Wiki clips:
 
 ```bash
 uv run r1999-playable-voice-index "Paper Heron" \
-  --story-index /path/to/story-index-3.7.jsonl \
   --output /path/to/paper-heron-voice-index.json
 ```
 
 The index records official English text, source voice IDs, Wwise events, banks,
 media IDs, and SHA-256 identities for the bank and exact source media bytes.
+When `--story-index` is omitted, the command selects the newest local
+`story-index*.jsonl`; pass an explicit path to reproduce an older extraction.
 See [`docs/source-voice-coverage.md`](docs/source-voice-coverage.md) for the
 selection and import procedure.
 

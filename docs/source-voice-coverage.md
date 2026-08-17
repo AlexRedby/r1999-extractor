@@ -46,7 +46,11 @@ English configs, reads `json_character_voice` for official titles and text,
 resolves each voice ID through `json_story_audio_role`, and binds the route to
 the installed Wwise bank index. For each installed route it reads the bank once
 and records SHA-256 for both the exact bank bytes and every embedded or external
-media item.
+media item. Before binding, it validates every bank entry and nested event/media
+route in the index. A bank path must remain below the audio root and its basename
+must equal the claimed filename; external media must remain below the resolved
+`Media` root. These checks prevent a symlink or incoherent index entry from
+binding a trusted label to different bytes.
 
 Paper Heron demonstrates the complete path. The installed patch 3.7 data binds:
 
@@ -61,7 +65,9 @@ Three of those eight character-story media items are reused by records with
 different text hashes. The index reports this as
 `character_story_media_text_conflict_count: 3`; those routes remain useful as
 speaker-identity evidence but must not be treated as a one-to-one transcript or
-selected automatically as a reference clip.
+selected automatically as a reference clip. The same check is applied to
+official playable rows independently by voice ID, Wwise event, and media item.
+Paper Heron's official set has zero conflicts in all three bindings.
 
 The previous gap was in extraction, not in the installed playable banks:
 `examples/provision_reverse1999_voices.py` downloaded a fixed set of archived
@@ -80,9 +86,16 @@ To build and inspect the exact bindings:
 
 ```bash
 uv run r1999-playable-voice-index "Paper Heron" \
-  --story-index /path/to/story-index-3.7.jsonl \
   --output /path/to/paper-heron-voice-index.json
 ```
+
+Without `--story-index`, the command chooses the newest local
+`story-index*.jsonl`, which makes the default follow the current regenerated
+artifact rather than the original fixed filename. An explicit path remains the
+reproducible override. Both current `source_audio_id` and legacy
+`source_voice_id` story records are accepted; a record with neither field, a
+route drift, or a missing artifact fails with a regeneration command instead of
+a traceback.
 
 For reference preparation, choose exact `voice_id` rows from that index. The
 traditional Wiki trio maps locally to the official `First Encounter`,
