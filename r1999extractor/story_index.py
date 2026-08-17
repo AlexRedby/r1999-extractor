@@ -12,7 +12,7 @@ from pathlib import Path
 from vntts_artifacts.hashing import text_sha256
 from vntts_artifacts.story_index import write_story_index as write_story_index_document
 
-from r1999extractor.reverse1999_aliases import voice_character_for_line
+from r1999extractor.reverse1999_aliases import voice_character_for_speaker
 from r1999extractor.reverse1999_config import (
     Reverse1999ConfigError,
     find_game_config_directory,
@@ -169,7 +169,7 @@ def parse_story_document(document, source, *, language_index=2, include_non_spea
                 source_voice_spec=source_voice_id or None,
                 display_seconds=display_seconds,
                 kind="narration" if speaker == "Narrator" else "dialogue",
-                voice_character=voice_character_for_line(line_id, speaker, line_text_sha256),
+                voice_character=voice_character_for_speaker(speaker),
                 text_sha256=line_text_sha256,
                 speakable=speakable,
                 filter_reason=filter_reason,
@@ -454,7 +454,7 @@ def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=Fal
                 source_voice_spec=None,
                 display_seconds=None,
                 kind="dialogue" if plot_type == "dialog" else "narration",
-                voice_character=voice_character_for_line(line_id, speaker, line_text_sha256),
+                voice_character=voice_character_for_speaker(speaker),
                 text_sha256=line_text_sha256,
                 speakable=speakable,
                 filter_reason=filter_reason,

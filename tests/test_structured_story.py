@@ -53,6 +53,29 @@ class StructuredStoryTest(unittest.TestCase):
         self.assertEqual(lines[0].speaker, "Test Speaker")
         self.assertEqual(lines[0].kind, "dialogue")
 
+    def test_routes_exact_unknown_structured_speaker_to_narrator(self):
+        tables = {
+            "json_test_dialog": [[10010, 2, "dialog", 0, 0, "speaker", "line"]],
+        }
+        specs = (
+            StructuredSourceSpec(
+                "json_test_dialog",
+                6,
+                type_index=2,
+                allowed_types=("dialog",),
+                speaker_name_index=5,
+            ),
+        )
+
+        lines = extract_structured_story_lines(
+            {"speaker": "???", "line": "A hidden speaker line."},
+            tables,
+            specs=specs,
+        )
+
+        self.assertEqual(lines[0].speaker, "???")
+        self.assertEqual(lines[0].voice_character, "Narrator")
+
     def test_audit_marks_only_explicit_specs_as_handled(self):
         language = {"one": "One", "two": "Two"}
         tables = {

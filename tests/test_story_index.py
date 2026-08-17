@@ -338,7 +338,18 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(lines[0].next_text, "A synthetic narration line.")
         self.assertEqual(lines[1].kind, "narration")
 
-    def test_applies_verified_voice_reveal_without_rewriting_display_speaker(self):
+    def test_routes_exact_unknown_unity_speaker_without_losing_source_voice(self):
+        lines = parse_story_document(
+            ["title", "", [[7, "step", payload("???", "A hidden speaker line.", voice="play_7")]]],
+            "json_story_step_24006",
+        )
+
+        self.assertEqual(lines[0].speaker, "???")
+        self.assertEqual(lines[0].voice_character, "Narrator")
+        self.assertEqual(lines[0].source_voice_id, "play_7")
+        self.assertEqual(lines[0].source_voice_spec, "play_7")
+
+    def test_routes_exact_unknown_speaker_to_narrator_despite_contextual_reveal(self):
         language = {
             "hero": "Silverwing Eagle",
             "story": "The Eaglet Takes Wing",
@@ -385,7 +396,7 @@ class StoryIndexTest(unittest.TestCase):
             ],
         )
         self.assertEqual(lines[1].speaker, "???")
-        self.assertEqual(lines[1].voice_character, "Marguerite")
+        self.assertEqual(lines[1].voice_character, "Narrator")
         self.assertEqual(lines[3].speaker, "Lorentz Butterfly")
         self.assertEqual(lines[3].voice_character, "Marguerite")
 

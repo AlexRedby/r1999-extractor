@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from vntts_artifacts.hashing import text_sha256
 
-from r1999extractor.reverse1999_aliases import canonical_voice_name
+from r1999extractor.reverse1999_aliases import voice_character_for_speaker
 from r1999extractor.reverse1999_config import extract_character_identities, resolve_speaker_name
 from r1999extractor.story_index import (
     StoryLine,
@@ -205,7 +205,7 @@ def extract_structured_story_lines(
                     source_voice_spec=voice_spec or None,
                     display_seconds=None,
                     kind=kind,
-                    voice_character=canonical_voice_name(speaker) or speaker,
+                    voice_character=voice_character_for_speaker(speaker),
                     text_sha256=text_sha256(text),
                     speakable=speakable,
                     filter_reason=filter_reason,
