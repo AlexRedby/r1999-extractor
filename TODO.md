@@ -11,9 +11,3 @@ in project documentation.
       whose 15 speakers are not covered by the current voice manifest. Do not
       silently render named characters with the narrator voice. Silverwing
       Eagle and eleven other patch speakers now use verified local game audio.
-
-## Narrow the extractor boundary
-
-- [ ] After VNTTS can import existing jobs, remove generic bulk generation,
-      MOSS generation, delivery annotation, and pregeneration workbench modules
-      and their command entry points from this package.
