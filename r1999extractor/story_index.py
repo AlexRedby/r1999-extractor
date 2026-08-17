@@ -12,7 +12,7 @@ from pathlib import Path
 from vntts_artifacts.hashing import text_sha256
 from vntts_artifacts.story_index import write_story_index as write_story_index_document
 
-from r1999extractor.reverse1999_aliases import canonical_voice_name
+from r1999extractor.reverse1999_aliases import voice_character_for_line
 from r1999extractor.reverse1999_config import (
     Reverse1999ConfigError,
     find_game_config_directory,
@@ -153,10 +153,12 @@ def parse_story_document(document, source, *, language_index=2, include_non_spea
             value = payload[1][language_index]
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 display_seconds = float(value)
+        line_id = f"reverse1999:{chapter}:{sequence}"
+        line_text_sha256 = text_sha256(text)
         lines.append(
             StoryLine(
                 record_type="line",
-                line_id=f"reverse1999:{chapter}:{sequence}",
+                line_id=line_id,
                 chapter=chapter,
                 sequence=sequence,
                 speaker=speaker,
@@ -167,8 +169,8 @@ def parse_story_document(document, source, *, language_index=2, include_non_spea
                 source_voice_spec=source_voice_id or None,
                 display_seconds=display_seconds,
                 kind="narration" if speaker == "Narrator" else "dialogue",
-                voice_character=canonical_voice_name(speaker) or speaker,
-                text_sha256=text_sha256(text),
+                voice_character=voice_character_for_line(line_id, speaker, line_text_sha256),
+                text_sha256=line_text_sha256,
                 speakable=speakable,
                 filter_reason=filter_reason,
             )
@@ -436,10 +438,12 @@ def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=Fal
             raw_speaker = raw_speaker.replace("{roleName}", group.get("character", ""))
         speaker = raw_speaker or "Narrator"
         group_positions[group_id] += 1
+        line_id = f"reverse1999:hero-story-plot:{plot_id}"
+        line_text_sha256 = text_sha256(text)
         lines.append(
             StoryLine(
                 record_type="line",
-                line_id=f"reverse1999:hero-story-plot:{plot_id}",
+                line_id=line_id,
                 chapter=str(group_id),
                 sequence=plot_id,
                 speaker=speaker,
@@ -450,8 +454,8 @@ def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=Fal
                 source_voice_spec=None,
                 display_seconds=None,
                 kind="dialogue" if plot_type == "dialog" else "narration",
-                voice_character=canonical_voice_name(speaker) or speaker,
-                text_sha256=text_sha256(text),
+                voice_character=voice_character_for_line(line_id, speaker, line_text_sha256),
+                text_sha256=line_text_sha256,
                 speakable=speakable,
                 filter_reason=filter_reason,
                 audio_status="no_audio",

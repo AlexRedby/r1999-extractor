@@ -7,10 +7,10 @@ in project documentation.
 
 ## Source voice coverage
 
-- [ ] Add or explicitly assign references for the remaining 53 patch 3.7 lines
+- [ ] Add or explicitly assign references for the remaining 52 patch 3.7 lines
       whose 16 speakers are not covered by the current voice manifest. Do not
       silently render named characters with the narrator voice. Silverwing
-      Eagle and nine other patch speakers now use verified local game audio.
+      Eagle and eleven other patch speakers now use verified local game audio.
 
 ## Narrow the extractor boundary
 

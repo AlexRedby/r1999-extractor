@@ -38,6 +38,53 @@ The imported source/reference checksum pairs are:
 The voice manifest and reference WAVs are local ignored source artifacts; Git
 stores the reproducible evidence and procedure, not extracted game audio.
 
+## Verified Lorentz Butterfly reveal
+
+The 2026-08-17 audit reduced uncovered content from 53 to 52 lines while the
+uncovered-label count remained 16. The config-only anecdote row
+`reverse1999:hero-story-plot:315407063` intentionally displays `???`, but its
+installed story sequence explicitly reveals the voice:
+
+- row `315407062` says, "A familiar scope glint flashes";
+- row `315407063` contains `???` saying, "Thank you all for your cooperation";
+- row `315407064` says, "Hearing that voice, Eagle lets out a sigh of relief";
+- row `315407065` identifies the next utterance as `Lorentz Butterfly`.
+
+All four rows belong to `json_hero_story_plot` group `315407`:
+
+| Row | Type | Speaker key | Text key |
+| --- | --- | --- | --- |
+| `315407062` | `aside` | blank | `language_10121873` |
+| `315407063` | `dialog` | `language_10000908` (`???`) | `language_10121874` |
+| `315407064` | `aside` | blank | `language_10121875` |
+| `315407065` | `dialog` | `language_10115762` (`Lorentz Butterfly`) | `language_10121876` |
+
+Row `315407063` has no direct audio or identity field. The surrounding
+narration is therefore the game-provided identity reveal, not a name or
+voice-similarity guess.
+
+The extractor applies this as a full-line-ID override to `Marguerite`, bound
+also to the expected `???` speaker and text SHA-256
+`9cfc6588569f6d8828c59d5c6a5d806a0306295572dca456626d59a4c3e85d7b`.
+Changed content therefore fails closed. `Marguerite` already has the alias
+`Lorentz Butterfly`; every other `???` record remains unresolved. Marguerite's
+installed references come from `hero3139_vo.bnk`:
+
+| Media ID | Source SHA-256 | Reference SHA-256 |
+| --- | --- | --- |
+| `946604536` | `f3fe9c902dceba57cd4edd75e90437bc58db2035ca50d437afd3f4d894cbac17` | `712a68b313c2ce34725f6ae3fac100abf7663be0282844942143851dde49b355` |
+| `435428919` | `67cec96020a02f23e1ee537078ffb5288d5d9cebeb2c8a55ab418c9ce76f05d1` | `1d9f01178f3feba5d4bcbb4fb5a0c06795f9ab111fda747d87fc8108f7f40249` |
+| `537962680` | `d4a762c346feb7a430bff27381576714acdf8db4b7d4290a3d7111aa1844234a` | `aafdda578caa742e7527fad3dc396d2d1e8c31a1537b929c377d99f34726aa02` |
+
+The verification used source bundle SHA-256
+`0d5551f483db49f4903d7e17196cba5a19bb38c49d8e6549d9024b0101bea6ab`.
+The regenerated source audit reviewed 105 story-like tables with 31 explicit
+extraction schemas and had SHA-256
+`60b6915c367b72455fdb36b7fab7930ed1143f318a4d600fcc34c73c95d97a25`.
+The current bank index remained fresh with 2,344 banks and zero errors; its
+SHA-256 was
+`ba1aab6da5b9ff8cb58f11bcdd1cd5d236f4dd11dc1289e8c0f38256ae2e689b`.
+
 ## Remaining uncovered labels
 
 | Voice character | Lines | Available evidence |
@@ -49,7 +96,7 @@ stores the reproducible evidence and procedure, not extracted game audio.
 | Lab Assistant II | 4 | Blank game voice IDs; no exact installed same-speaker audio |
 | A Youthful Chirp | 3 | Blank game voice IDs; no exact installed same-speaker audio |
 | Meteorological Observer I | 3 | Blank game voice IDs; no exact installed same-speaker audio |
-| `???` | 2 | Generic label is shared by many unrelated voices; not an identity |
+| `???` | 1 | The remaining chirp is unrelated; generic label is not an identity |
 | Armed Mercenary II | 2 | Blank game voice IDs; no exact installed same-speaker audio |
 | Intern III | 2 | Blank game voice IDs; no exact installed same-speaker audio |
 | `"Bird"` | 1 | Blank game voice ID; no exact installed same-speaker audio |

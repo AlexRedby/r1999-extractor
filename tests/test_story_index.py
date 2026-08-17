@@ -338,6 +338,57 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(lines[0].next_text, "A synthetic narration line.")
         self.assertEqual(lines[1].kind, "narration")
 
+    def test_applies_verified_voice_reveal_without_rewriting_display_speaker(self):
+        language = {
+            "hero": "Silverwing Eagle",
+            "story": "The Eaglet Takes Wing",
+            "episode": "An Eaglet on the Trail",
+            "unknown": "???",
+            "scope": "A familiar scope glint flashes.",
+            "revealed": '"Thank you all for your cooperation."',
+            "recognition": "Hearing that voice, Eagle lets out a sigh of relief.",
+            "butterfly": "Lorentz Butterfly",
+            "confirmed": "This tedious chase ends now.",
+        }
+        tables = {
+            "json_hero_story": [[31, 0, "", "", "hero", 0, 0, 31, "story", "fallback"]],
+            "json_hero_story_plot_group": [[315407, 31, "episode", "fallback", 0, "", 1, "hero"]],
+            "json_hero_story_plot": [
+                [315407062, 315407, "aside", "", "", "scope", 0, "3", "", "37500175#1", ""],
+                [315407063, 315407, "dialog", "", "unknown", "revealed", 0, "", "", "", ""],
+                [315407064, 315407, "aside", "", "", "recognition", 0, "", "", "", ""],
+                [
+                    315407065,
+                    315407,
+                    "dialog",
+                    "",
+                    "butterfly",
+                    "confirmed",
+                    0,
+                    "",
+                    "",
+                    "",
+                    "",
+                ],
+            ],
+        }
+
+        lines = extract_hero_story_plot_lines(language, tables)
+
+        self.assertEqual(
+            [line.line_id for line in lines],
+            [
+                "reverse1999:hero-story-plot:315407062",
+                "reverse1999:hero-story-plot:315407063",
+                "reverse1999:hero-story-plot:315407064",
+                "reverse1999:hero-story-plot:315407065",
+            ],
+        )
+        self.assertEqual(lines[1].speaker, "???")
+        self.assertEqual(lines[1].voice_character, "Marguerite")
+        self.assertEqual(lines[3].speaker, "Lorentz Butterfly")
+        self.assertEqual(lines[3].voice_character, "Marguerite")
+
     def test_rejects_conflicting_collection_metadata(self):
         lines = parse_story_document(
             [
