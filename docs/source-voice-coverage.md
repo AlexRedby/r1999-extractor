@@ -38,6 +38,73 @@ The imported source/reference checksum pairs are:
 The voice manifest and reference WAVs are local ignored source artifacts; Git
 stores the reproducible evidence and procedure, not extracted game audio.
 
+## Playable-character voice extraction
+
+`r1999-playable-voice-index` replaces Wiki-only discovery for playable
+characters with a game-owned, provenance-bound index. It decrypts the installed
+English configs, reads `json_character_voice` for official titles and text,
+resolves each voice ID through `json_story_audio_role`, and binds the route to
+the installed Wwise bank index. For each installed route it reads the bank once
+and records SHA-256 for both the exact bank bytes and every embedded or external
+media item.
+
+Paper Heron demonstrates the complete path. The installed patch 3.7 data binds:
+
+- character ID `3141` and 51 English `json_character_voice` rows;
+- 39 distinct Wwise events and 41 distinct media items across
+  `hero3141_mainvoc.bnk` and `hero3141_vo.bnk`;
+- all 51 config rows with `installed` source status;
+- 13 `Spring Comes Slowly` character-story records to eight installed media
+  items in `hero3141_mainstory.bnk`.
+
+Three of those eight character-story media items are reused by records with
+different text hashes. The index reports this as
+`character_story_media_text_conflict_count: 3`; those routes remain useful as
+speaker-identity evidence but must not be treated as a one-to-one transcript or
+selected automatically as a reference clip.
+
+The previous gap was in extraction, not in the installed playable banks:
+`examples/provision_reverse1999_voices.py` downloaded a fixed set of archived
+Wiki files, while the story extractor did not parse `json_character_voice`.
+Consequently a new playable character such as Paper Heron could have locally
+installed voice banks and official text yet still be absent from the Wiki-built
+manifest.
+
+The patch 3.4 story is a separate source. Its rows correctly name
+`activityvoc_hero3141_3_4_bulaochun_part01`, `part02`, and `part03`, but those
+banks are not present in the installed patch 3.7 audio directory. The playable
+`mainvoc`, combat `vo`, and reusable `mainstory` banks do not authorize relabeling
+those missing activity events as installed story audio.
+
+To build and inspect the exact bindings:
+
+```bash
+uv run r1999-playable-voice-index "Paper Heron" \
+  --story-index /path/to/story-index-3.7.jsonl \
+  --output /path/to/paper-heron-voice-index.json
+```
+
+For reference preparation, choose exact `voice_id` rows from that index. The
+traditional Wiki trio maps locally to the official `First Encounter`,
+`Chitchat I`, and `Chitchat II` rows. Pass their recorded bank and explicit
+media IDs to `r1999-voice-import`, then score every resulting WAV with
+`r1999-audio-score`. The importer records bank, media ID, source SHA-256, and
+reference SHA-256 in the local v2 manifest. Do not use an unreviewed
+character-story route whose media is bound to multiple text hashes.
+
+The exact Paper Heron Wiki-equivalent reconciliation is:
+
+| Official title | Voice ID | Media ID | Source SHA-256 | Technical score |
+| --- | --- | --- | --- | --- |
+| First Encounter | `1314101` | `555568095` | `06619a7a988dbc94dd25076246a3d65fb32c3527ffbf8cd651d9d234c7f6d686` | 80, `too-long` |
+| Chitchat I | `1314116` | `354191196` | `ff74e74071734a622c6a779ab16843605489fff54c50a757c683365d5ff8033c` | 100, no technical flags |
+| Chitchat II | `1314117` | `856018807` | `f4853e4306cab0d2fcd66f220a07081114bae2801ede6a2fea8ef53bd7e16711` | 80, `too-long` |
+
+All three imported source hashes match the playable-voice index. The two long
+clips require deliberate trimming or a different exact playable line before
+they are used as compact synthesis references. Technical scoring does not
+replace listening for music/SFX, multiple speakers, or speaker identity.
+
 ## Exact unknown-speaker policy
 
 Every extracted story line whose display speaker is exactly `???` uses
@@ -77,6 +144,25 @@ These labels remain deliberately unassigned. A future assignment requires a
 game voice ID, an unambiguous portrait/NPC-to-bank mapping, or separately
 reviewed local game dialogue proving the speaker identity. Reusing one generic
 role for another or selecting a merely similar voice is not sufficient.
+
+The 2026-08-17 exhaustive installed-data recheck found no further safe local
+assignment:
+
+- Intern I/II/III, Lab Assistant I/II, Armed Mercenary I/II, and
+  Meteorological Observer I/II have no portrait, voice ID, event, or bank on any
+  of their scoped records.
+- `A Youthful Chirp`, `"Bird"`, and `Rat` have distinct portraits but no other
+  record for those portraits supplies a voice ID or bank.
+- Bechan and Glyndŵr have same-name/same-portrait records elsewhere, but all
+  configured routes point to absent banks (`prologuechapter_13_part04` and
+  `activitystory_beiai3_7_xiaoruiannong_sfx`).
+- The uncovered Manus Believer portrait `400101.png` is also used by multiple
+  incompatible Manus labels and banks; the generic display name is not an
+  exact identity anchor.
+
+Therefore the locally executable coverage result remains 51 lines / 15 voice
+labels. This is an evidence boundary, not permission to synthesize those named
+characters with Narrator or to borrow a merely similar generic role.
 
 ## Reproduction procedure
 

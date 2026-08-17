@@ -176,6 +176,20 @@ game-derived identity evidence, checksums, and the procedure for refusing
 ambiguous assignments are in
 [`docs/source-voice-coverage.md`](docs/source-voice-coverage.md).
 
+Playable-character voice text can be bound directly to installed game audio,
+without downloading Wiki clips:
+
+```bash
+uv run r1999-playable-voice-index "Paper Heron" \
+  --story-index /path/to/story-index-3.7.jsonl \
+  --output /path/to/paper-heron-voice-index.json
+```
+
+The index records official English text, source voice IDs, Wwise events, banks,
+media IDs, and SHA-256 identities for the bank and exact source media bytes.
+See [`docs/source-voice-coverage.md`](docs/source-voice-coverage.md) for the
+selection and import procedure.
+
 If extraction artifacts were created while these tools lived in VNTTS, copy
 them into the extractor application-data directory without deleting or
 overwriting the originals:
