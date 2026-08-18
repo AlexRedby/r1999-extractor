@@ -185,30 +185,45 @@ def decode_references(
     references_directory.mkdir(parents=True, exist_ok=True)
     slug = slugify(character, fallback="character")
     decoded = []
+    for index, item in enumerate(selected, start=1):
+        output = references_directory / f"{slug}-game-{index:02d}.wav"
+        decoded.append(
+            decode_reference_data(
+                item.data,
+                output,
+                item.media_id,
+                decoder,
+                bank=bank.name,
+            )
+        )
+    return decoded
+
+
+def decode_reference_data(data, output, media_id, decoder, *, bank=None):
+    """Decode one already-snapshotted Wwise media payload into a reference WAV."""
+    if not isinstance(data, bytes) or not data:
+        raise GameVoiceImportError(f"Media {media_id} contains no bytes")
+    output = Path(output).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="r1999-game-voice-") as temporary_directory:
         temporary_directory = Path(temporary_directory)
-        for index, item in enumerate(selected, start=1):
-            source = temporary_directory / f"{item.media_id}.wem"
-            source.write_bytes(item.data)
-            output = references_directory / f"{slug}-game-{index:02d}.wav"
-            decoded_output = temporary_directory / f"{item.media_id}.wav"
-            convert_audio(
-                source,
-                decoded_output,
-                decoder=decoder,
-                overwrite=True,
-            )
-            trim_and_normalize_voice_reference(decoded_output, output)
-            decoded.append(
-                ImportedReference(
-                    path=output,
-                    media_id=item.media_id,
-                    source_sha256=hashlib.sha256(item.data).hexdigest(),
-                    reference_sha256=sha256_file(output),
-                    bank=bank.name,
-                )
-            )
-    return decoded
+        source = temporary_directory / f"{media_id}.wem"
+        source.write_bytes(data)
+        decoded_output = temporary_directory / f"{media_id}.wav"
+        convert_audio(
+            source,
+            decoded_output,
+            decoder=decoder,
+            overwrite=True,
+        )
+        trim_and_normalize_voice_reference(decoded_output, output)
+    return ImportedReference(
+        path=output,
+        media_id=media_id,
+        source_sha256=hashlib.sha256(data).hexdigest(),
+        reference_sha256=sha256_file(output),
+        bank=bank,
+    )
 
 
 def update_manifest(output_directory, character, references, source_bank):

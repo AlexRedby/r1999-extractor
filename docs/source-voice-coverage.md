@@ -201,6 +201,26 @@ bank/media checksum binding, technical scoring and listening. Aderyn has both
 those groups until auditioning establishes whether one reference set can
 truthfully represent every variant.
 
+`r1999-story-voice-candidates` implements the safe preparation boundary for
+this recovery. It selects only exact requested `voice_character` records whose
+story source status is `available`, validates line/text identity, reads each
+indexed bank once, verifies the fresh event route against `source_media_ids`,
+and decodes the exact embedded media bytes from that snapshot. Candidate WAVs
+are grouped by character, portrait and bank so Aderyn variants cannot be
+silently collapsed. The report retains every source line, bank/media/reference
+SHA-256, transcript conflict, technical metric and an explicit manual-content
+review requirement. It refuses to replace an existing candidate directory and
+does not write `manifest.json`.
+
+Run the six-role preparation with:
+
+```bash
+uv run r1999-story-voice-candidates \
+  --role Aderyn --role Dobharchú --role "Mrs. Owen" \
+  --role Hotelier --role Poacher --role "Aderyn's Father" \
+  --output /path/to/character-story-reference-candidates
+```
+
 No exact installed same-speaker route was found for `Poacher I` (13 blocked
 lines) or `Poacher II` (nine). Do not merge either numbered role with the
 separate `Poacher` identity merely because that role has one installed clip.

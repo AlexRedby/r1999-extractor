@@ -191,6 +191,23 @@ When `--story-index` is omitted, the command selects the newest local
 See [`docs/source-voice-coverage.md`](docs/source-voice-coverage.md) for the
 selection and import procedure.
 
+For named Character Story roles that have silent target rows but installed
+same-speaker dialogue elsewhere, build a non-authoritative audition set first:
+
+```bash
+uv run r1999-story-voice-candidates \
+  --role Aderyn --role Dobharchú --role "Mrs. Owen" \
+  --role Hotelier --role Poacher --role "Aderyn's Father" \
+  --output /path/to/character-story-reference-candidates
+```
+
+The command snapshots and revalidates the story index, bank index and exact
+bank bytes; verifies every Wwise event-to-media route; decodes only those media
+payloads; and records source/reference SHA-256 plus technical metrics. Output is
+an audition set, not a voice manifest: every candidate remains marked for
+manual speaker, music/SFX and multiple-speaker review. Existing output is never
+replaced.
+
 If extraction artifacts were created while these tools lived in VNTTS, copy
 them into the extractor application-data directory without deleting or
 overwriting the originals:
