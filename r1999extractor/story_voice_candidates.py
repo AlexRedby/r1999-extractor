@@ -291,6 +291,8 @@ def build_story_voice_candidates(
                 bank=bank,
             )
             metrics = analyzer(imported.path)
+            metrics_document = asdict(metrics)
+            metrics_document["path"] = relative.as_posix()
             text_hashes = sorted({line.text_sha256 for line in source_lines})
             candidates.append(
                 {
@@ -304,7 +306,7 @@ def build_story_voice_candidates(
                     "reference_sha256": imported.reference_sha256,
                     "source_lines": [asdict(line) for line in source_lines],
                     "transcript_conflict": len(text_hashes) > 1,
-                    "metrics": asdict(metrics),
+                    "metrics": metrics_document,
                     "technical_pass": not metrics.technical_flags,
                     "manual_content_review_required": True,
                 }

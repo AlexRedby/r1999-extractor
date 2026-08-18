@@ -189,6 +189,10 @@ class StoryVoiceCandidateTest(unittest.TestCase):
         self.assertEqual(report["candidate_count"], 2)
         self.assertTrue(report["candidates"][0]["transcript_conflict"])
         self.assertTrue(report["candidates"][0]["manual_content_review_required"])
+        self.assertEqual(
+            report["candidates"][0]["metrics"]["path"],
+            report["candidates"][0]["reference"],
+        )
         self.assertEqual(reference_digest, report["candidates"][0]["reference_sha256"])
         self.assertFalse(manifest_exists)
 
