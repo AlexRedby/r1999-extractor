@@ -125,6 +125,18 @@ class StoryVoiceCandidateTest(unittest.TestCase):
             with self.assertRaisesRegex(StoryVoiceCandidateError, "Missing"):
                 collect_story_voice_lines(story, ["Missing"])
 
+    def test_normalized_quoted_display_variant_keeps_requested_role_identity(self):
+        with TemporaryDirectory() as directory:
+            line = story_line(1, "Exact role line.")
+            line["speaker"] = '"Mrs. Owen"'
+            line["voice_character"] = '"Mrs. Owen"'
+            story = write_story(Path(directory) / "story.jsonl", [line])
+
+            lines, _digest = collect_story_voice_lines(story, ["Mrs. Owen"])
+
+        self.assertEqual(lines[0].character, "Mrs. Owen")
+        self.assertEqual(lines[0].speaker, '"Mrs. Owen"')
+
     def test_builds_grouped_checksum_bound_audition_without_manifest_publication(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

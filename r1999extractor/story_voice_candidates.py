@@ -98,7 +98,7 @@ def collect_story_voice_lines(story_index, roles):
         ) from error
     lines = []
     seen = set()
-    observed_roles = {}
+    observed_roles = set()
     try:
         decoded = payload.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -116,11 +116,7 @@ def collect_story_voice_lines(story_index, roles):
         key = normalize_character_name(character)
         if key not in requested or record.get("source_audio_status") != "available":
             continue
-        if key in observed_roles and observed_roles[key] != character:
-            raise StoryVoiceCandidateError(
-                f"Story role identity is ambiguous: {observed_roles[key]!r}, {character!r}"
-            )
-        observed_roles[key] = character
+        observed_roles.add(key)
         text = _required_text(record.get("text"), f"Story line {number} text")
         text_sha256 = _required_text(record.get("text_sha256"), f"Story line {number} text_sha256")
         if hashlib.sha256(text.encode("utf-8")).hexdigest() != text_sha256:
@@ -137,7 +133,7 @@ def collect_story_voice_lines(story_index, roles):
             raise StoryVoiceCandidateError(f"Story line {number} has no valid installed media IDs")
         line = StoryVoiceLine(
             line_id=_required_text(record.get("line_id"), f"Story line {number} ID"),
-            character=character,
+            character=requested[key],
             speaker=_required_text(record.get("speaker"), f"Story line {number} speaker"),
             portrait=(
                 str(record["portrait"]).strip()
