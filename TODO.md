@@ -7,15 +7,15 @@ in project documentation.
 
 ## Source voice coverage
 
-- [ ] Recover and import exact Character Story references for Aderyn,
-      Dobharchú, Mrs. Owen, Hotelier, Poacher and Aderyn's Father. Bind selected
-      clips to installed bank/media SHA-256 values, score and listen to them,
-      and preserve Aderyn's `hero3146` versus `npcnoname326` portrait variants
-      until their identity is verified. Re-run the VNTTS voice preflight; these
-      candidates can potentially cover 214 of the current 237 blocked lines.
-      Re-audit `Poacher I`, `Poacher II` and Glyndŵr, but do not merge named
-      roles or treat configured-unavailable audio as installed. Evidence and
-      exact current counts are in `docs/source-voice-coverage.md`.
+- [ ] Listen to and decide the checksum-bound Character Story audition set,
+      then import only accepted references for Aderyn, Dobharchú, Mrs. Owen,
+      Hotelier, Poacher and Aderyn's Father and re-run VNTTS preflight. The
+      source/index/bank/media extraction is complete: 53 candidates across 19
+      portrait/bank groups, 12 objective technical passes and two transcript
+      conflicts. Preserve Aderyn variants and the anomalous Mrs. Owen group;
+      Hotelier has no minimum-duration pass. Do not merge `Poacher I`, `Poacher
+      II` or Glyndŵr or treat configured-unavailable audio as installed. Exact
+      hashes and blockers are in `docs/source-voice-coverage.md`.
 
 - [ ] Add or explicitly assign references for the remaining 51 patch 3.7 lines
       whose 15 speakers are not covered by the current voice manifest. Do not

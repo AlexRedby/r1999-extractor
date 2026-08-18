@@ -221,6 +221,24 @@ uv run r1999-story-voice-candidates \
   --output /path/to/character-story-reference-candidates
 ```
 
+The real 2026-08-18 run from clean extractor commit `16ca725` produced 53
+candidate WAVs across 19 exact portrait/bank groups and 57 source records. The
+portable report SHA-256 is
+`8d91db80f32abecdeee7582250573ae103eaf6572b48b18cd815938fd3e2a9c1`;
+the path-plus-file-digest inventory SHA-256 is
+`ee5e4e1c27b0e1a6bb19f3e07979b05324e1e429ac12dad017d7619fb5b79258`
+for 54 files. All 53 reference paths and hashes revalidated. Twelve candidates
+pass the objective gates and two expose reused-media transcript conflicts.
+
+The result is deliberately not manifest-ready without listening. Aderyn spans
+12 portrait/bank groups, only six of which contain an objectively passing
+candidate. Hotelier has five exact clips but none reaches the minimum duration.
+One quoted Mrs. Owen record uses portrait `637913.png` and routes through
+`activityvoc_story_npcnoname323_beiai.bnk`, so it must not be merged with the
+ordinary `637901.png` / `npcnoname322` group without content review. The
+audition set lives in the ignored voice-pack data directory; an earlier report
+with non-portable staging paths is preserved separately as superseded evidence.
+
 No exact installed same-speaker route was found for `Poacher I` (13 blocked
 lines) or `Poacher II` (nine). Do not merge either numbered role with the
 separate `Poacher` identity merely because that role has one installed clip.
