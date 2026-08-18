@@ -4,6 +4,7 @@ import os
 import struct
 import unittest
 import wave
+import zlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -71,9 +72,13 @@ class StoryVoiceReviewDialogTest(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory()
         self.root = Path(self.directory.name)
+        self.portraits = self.root / "portraits"
+        self.portraits.mkdir()
+        self._write_png(self.portraits / "534704.png", red=120)
         self.report = self._make_report()
         self.dialog = StoryVoiceReviewDialog(
             self.report,
+            portrait_directory=self.portraits,
             player_factory=_Player,
             audio_output_factory=_AudioOutput,
         )
@@ -98,6 +103,22 @@ class StoryVoiceReviewDialogTest(unittest.TestCase):
             output.setsampwidth(2)
             output.setframerate(sample_rate)
             output.writeframes(struct.pack(f"<{len(frames)}h", *frames))
+
+    def _write_png(self, path, *, red):
+        def chunk(kind, payload):
+            return (
+                struct.pack(">I", len(payload))
+                + kind
+                + payload
+                + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+            )
+
+        payload = b"\x89PNG\r\n\x1a\n"
+        payload += chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 6, 0, 0, 0))
+        row = b"\x00" + bytes((red, 40, 20, 255)) * 2
+        payload += chunk(b"IDAT", zlib.compress(row * 2))
+        payload += chunk(b"IEND", b"")
+        path.write_bytes(payload)
 
     def _make_report(self):
         candidates = []
@@ -160,12 +181,15 @@ class StoryVoiceReviewDialogTest(unittest.TestCase):
         self.assertEqual(self.dialog.table.rowCount(), 1)
         self.assertIn("Dobharchú", self.dialog.details.text())
         self.assertIn("reverse1999:test:0", self.dialog.details.text())
+        self.assertFalse(self.dialog.portrait_image.pixmap().isNull())
         self.assertEqual(self.dialog.table.editTriggers(), QTableWidget.EditTrigger.NoEditTriggers)
 
         self.dialog.recommended_only.setChecked(False)
 
         self.assertEqual(self.dialog.table.rowCount(), 2)
         self.assertIn("too-short", self.dialog.table.item(1, 6).text())
+        self.dialog.table.setCurrentCell(1, 0)
+        self.assertEqual(self.dialog.portrait_image.text(), "Exact game portrait is not installed")
 
     def test_playback_keeps_decision_actions_enabled_and_uses_verified_buffer(self):
         candidate = self.dialog._selected_candidate()
@@ -217,6 +241,15 @@ class StoryVoiceReviewDialogTest(unittest.TestCase):
         self.dialog.save_decision("accept")
 
         self.assertIn("checksum changed", self.dialog.status.text())
+        self.assertFalse(self.dialog.session.decisions.get(candidate.key))
+
+    def test_changed_portrait_blocks_decision_after_display(self):
+        candidate = self.dialog._selected_candidate()
+        self._write_png(self.portraits / "534704.png", red=210)
+
+        self.dialog.save_decision("accept")
+
+        self.assertIn("portrait changed after display", self.dialog.status.text())
         self.assertFalse(self.dialog.session.decisions.get(candidate.key))
 
     def test_bound_automatic_evidence_is_visible_and_filterable(self):

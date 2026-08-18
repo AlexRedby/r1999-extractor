@@ -251,6 +251,16 @@ remain separate rather than becoming one Aderyn manifest identity. Mrs. Owen
 media `599773947` is not approved: the voice sounded usable, but its speech was
 not intelligible enough for a cloning reference.
 
+For the remaining Aderyn, Mrs. Owen and Hotelier audition, a read-only scan of
+all 7,018 installed iOS bundles recovered 11 of the 12 exact portrait sprites:
+all nine Aderyn identities (`314601`, `314617`, `314619`, `314622`, `314623`,
+`314625`, `533704`, `533705`, `533706`) and both Mrs. Owen identities (`637901`,
+`637913`). Hotelier `505401` is absent from the installed Sprite inventory and
+must display the missing-asset placeholder. The review UI accepts an explicit
+portrait directory, renders the selected exact PNG, and rechecks its snapshot
+before persisting a decision; portrait pixels remain supporting identity
+evidence and never replace the report's checksum-bound candidate key.
+
 No exact installed same-speaker route was found for `Poacher I` (13 blocked
 lines) or `Poacher II` (nine). Do not merge either numbered role with the
 separate `Poacher` identity merely because that role has one installed clip.

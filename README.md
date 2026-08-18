@@ -234,6 +234,10 @@ immutable report:
 ```bash
 uv sync --extra ui
 uv run r1999-story-voice-review-ui /path/to/candidates/report.json
+
+# Render exact locally extracted game portraits beside the selected candidate.
+uv run r1999-story-voice-review-ui /path/to/candidates/report.json \
+  --portrait-directory /path/to/exact-story-portraits
 ```
 
 The fixed action row supports Play, Accept, Reject, Uncertain and previous/next
@@ -241,7 +245,11 @@ pending navigation. `Space` plays, `Ctrl+Enter` accepts, `Ctrl+Backspace`
 rejects, `Ctrl+Shift+Enter` marks uncertain, and `Alt+Left` / `Alt+Right`
 navigate pending candidates. The table is read-only, so decision shortcuts do
 not start cell editing. A/B slots can retain and replay two candidates while
-the active filters change.
+the active filters change. When `--portrait-directory` is supplied, the UI
+loads only the exact safe filename from the candidate portrait identity, keeps
+the displayed pixels and SHA-256 snapshot together, and refuses a decision if
+the file changes after display. Missing exact sprites use a truthful placeholder
+rather than a similarly named portrait.
 
 Generate an optional advisory sidecar before opening the UI:
 

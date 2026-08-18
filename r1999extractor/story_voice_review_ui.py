@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt, QUrl
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
@@ -46,6 +46,7 @@ class StoryVoiceReviewDialog(QDialog):
         report_path,
         review_path=None,
         evidence_path=None,
+        portrait_directory=None,
         *,
         session_loader=load_review_session,
         decision_recorder=record_review_decision,
@@ -57,12 +58,18 @@ class StoryVoiceReviewDialog(QDialog):
         super().__init__(parent)
         self.report_path = Path(report_path).expanduser().resolve()
         self.review_path = None if review_path is None else Path(review_path).expanduser().resolve()
+        self.portrait_directory = (
+            None if portrait_directory is None else Path(portrait_directory).expanduser().resolve()
+        )
+        if self.portrait_directory is not None and not self.portrait_directory.is_dir():
+            raise StoryVoiceReviewError(f"Portrait directory is missing: {self.portrait_directory}")
         self._session_loader = session_loader
         self._decision_recorder = decision_recorder
         self.session = self._session_loader(self.report_path, self.review_path)
         self.evidence_path, self.evidence = evidence_loader(self.report_path, evidence_path)
         self._visible_candidates: tuple[ReviewCandidate, ...] = ()
         self._playback_buffer = None
+        self._portrait_snapshot = None
         self._ab_keys = {"A": None, "B": None}
 
         self.setWindowTitle("Character Story voice reference review")
@@ -114,6 +121,11 @@ class StoryVoiceReviewDialog(QDialog):
         self.details = QLabel()
         self.details.setWordWrap(True)
         self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.portrait_image = QLabel()
+        self.portrait_image.setAccessibleName("Exact game portrait")
+        self.portrait_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.portrait_image.setMinimumHeight(150)
+        self.portrait_image.setMaximumHeight(180)
         self.notes = QLineEdit()
         self.notes.setPlaceholderText("Optional decision note")
 
@@ -160,6 +172,7 @@ class StoryVoiceReviewDialog(QDialog):
         layout.addWidget(self.summary)
         layout.addLayout(filters)
         layout.addWidget(self.table, 1)
+        layout.addWidget(self.portrait_image)
         layout.addWidget(self.details)
         layout.addWidget(self.notes)
         layout.addLayout(actions)
@@ -361,10 +374,13 @@ class StoryVoiceReviewDialog(QDialog):
         self.previous_pending.setEnabled(self.session.pending_count > 0)
         self.next_pending.setEnabled(self.session.pending_count > 0)
         if candidate is None:
+            self._portrait_snapshot = None
+            self.portrait_image.clear()
             self.details.setText("No candidate matches the active filter.")
             self.notes.clear()
             return
         decision = self.session.decisions.get(candidate.key, {})
+        self._show_portrait(candidate)
         self.notes.setText(decision.get("notes", ""))
         lines = ", ".join(value for value in candidate.line_ids if value) or "not recorded"
         context_parts = []
@@ -409,6 +425,68 @@ class StoryVoiceReviewDialog(QDialog):
             f"transcript conflict: {'yes' if candidate.transcript_conflict else 'no'}; "
             f"recommended: {'yes' if candidate.recommended else 'no'}"
         )
+
+    def _portrait_payload(self, candidate):
+        if self.portrait_directory is None or not candidate.portrait:
+            return None
+        portrait = candidate.portrait
+        if "\\" in portrait or Path(portrait).name != portrait:
+            raise StoryVoiceReviewError("Portrait identity is not a safe filename")
+        path = (self.portrait_directory / portrait).resolve()
+        try:
+            path.relative_to(self.portrait_directory)
+        except ValueError as error:
+            raise StoryVoiceReviewError("Portrait image leaves its root") from error
+        if not path.exists():
+            return None
+        if not path.is_file():
+            raise StoryVoiceReviewError(f"Portrait image is not a file: {path}")
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise StoryVoiceReviewError(f"Unable to read portrait image {path}: {error}") from error
+        return payload, hashlib.sha256(payload).hexdigest()
+
+    def _show_portrait(self, candidate):
+        try:
+            snapshot = self._portrait_payload(candidate)
+        except StoryVoiceReviewError as error:
+            self._portrait_snapshot = None
+            self.portrait_image.setPixmap(QPixmap())
+            self.portrait_image.setText(f"Portrait blocked: {error}")
+            return
+        if snapshot is None:
+            self._portrait_snapshot = None
+            self.portrait_image.setPixmap(QPixmap())
+            self.portrait_image.setText("Exact game portrait is not installed")
+            return
+        payload, digest = snapshot
+        pixmap = QPixmap()
+        if not pixmap.loadFromData(payload, "PNG"):
+            self._portrait_snapshot = None
+            self.portrait_image.setPixmap(QPixmap())
+            self.portrait_image.setText("Portrait blocked: invalid PNG")
+            return
+        self._portrait_snapshot = (candidate.key, digest)
+        self.portrait_image.setText("")
+        self.portrait_image.setPixmap(
+            pixmap.scaled(
+                204,
+                204,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        self.portrait_image.setToolTip(f"SHA-256 {digest}")
+
+    def _portrait_is_unchanged(self, candidate):
+        if self._portrait_snapshot is None:
+            return True
+        key, digest = self._portrait_snapshot
+        if key != candidate.key:
+            return False
+        snapshot = self._portrait_payload(candidate)
+        return snapshot is not None and snapshot[1] == digest
 
     def _move_pending(self, offset):
         pending = [
@@ -483,6 +561,14 @@ class StoryVoiceReviewDialog(QDialog):
         if candidate is None:
             return
         try:
+            portrait_unchanged = self._portrait_is_unchanged(candidate)
+        except StoryVoiceReviewError as error:
+            self.status.setText(f"DECISION NOT SAVED: {error}")
+            return
+        if not portrait_unchanged:
+            self.status.setText("DECISION NOT SAVED: portrait changed after display")
+            return
+        try:
             self.session = self._decision_recorder(
                 self.report_path,
                 candidate.key,
@@ -529,6 +615,7 @@ def create_parser():
     parser.add_argument("report", type=Path)
     parser.add_argument("--review", type=Path)
     parser.add_argument("--evidence", type=Path)
+    parser.add_argument("--portrait-directory", type=Path)
     return parser
 
 
@@ -536,7 +623,12 @@ def main(arguments=None):
     options = create_parser().parse_args(arguments)
     application = QApplication.instance() or QApplication(sys.argv[:1])
     try:
-        dialog = StoryVoiceReviewDialog(options.report, options.review, options.evidence)
+        dialog = StoryVoiceReviewDialog(
+            options.report,
+            options.review,
+            options.evidence,
+            portrait_directory=options.portrait_directory,
+        )
     except (StoryVoiceEvidenceError, StoryVoiceReviewError) as error:
         QMessageBox.critical(None, "Character Story voice review", str(error))
         return 1
