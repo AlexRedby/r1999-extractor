@@ -177,6 +177,37 @@ Therefore the locally executable coverage result remains 51 lines / 15 voice
 labels. This is an evidence boundary, not permission to synthesize those named
 characters with Narrator or to borrow a merely similar generic role.
 
+## Character Story reference recovery candidates
+
+The current `The You That's Meant To Be` pregeneration workspace is a separate
+scope from the 51-line patch coverage result above. Its read-only 2026-08-18
+preflight has 237 lines blocked by nine missing manifest roles. A full
+story-index audit proves that six of those roles already have installed
+same-speaker dialogue elsewhere in the same Character Story:
+
+| Role | Blocked lines | Installed source bank evidence |
+| --- | ---: | --- |
+| Aderyn | 113 | `activityvoc_story_hero3146_beiai.bnk` and `activityvoc_story_npcnoname326_beiai.bnk` |
+| Dobharchú | 50 | `activityvoc_story_npcnoname323_beiai.bnk` |
+| Mrs. Owen | 34 | `activityvoc_story_npcnoname322_beiai.bnk` |
+| Hotelier | 12 | `activityvoc_story_npcnoname327_beiai.bnk` |
+| Poacher | 4 | `activityvoc_story_npcnoname325_beiai.bnk` |
+| Aderyn's Father | 1 | `activityvoc_story_npcnoname324_beiai.bnk` |
+
+These candidates can potentially cover 214 of the 237 blocked lines, but they
+are not yet manifest assignments. Each selected clip still needs exact
+bank/media checksum binding, technical scoring and listening. Aderyn has both
+`hero3146` and `npcnoname326` routes across distinct portrait groups; preserve
+those groups until auditioning establishes whether one reference set can
+truthfully represent every variant.
+
+No exact installed same-speaker route was found for `Poacher I` (13 blocked
+lines) or `Poacher II` (nine). Do not merge either numbered role with the
+separate `Poacher` identity merely because that role has one installed clip.
+Glyndŵr's one blocked line has only configured-unavailable routes in the
+current installation. Those 23 lines remain candidates for an explicit
+authoring fallback after this source audit, not for an inferred game voice.
+
 ## Reproduction procedure
 
 1. Load the current story-index JSONL and select the source kinds, chapter
