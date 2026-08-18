@@ -60,6 +60,9 @@ class StoryVoiceLine:
     source_event: str
     source_bank: str
     source_media_ids: tuple[int, ...]
+    previous_text: str | None = None
+    next_text: str | None = None
+    collection_title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +156,23 @@ def collect_story_voice_lines(story_index, roles):
                 record.get("source_bank"), f"Story line {number} source bank"
             ),
             source_media_ids=tuple(media_ids),
+            previous_text=(
+                str(record["previous_text"]).strip()
+                if isinstance(record.get("previous_text"), str)
+                and str(record["previous_text"]).strip()
+                else None
+            ),
+            next_text=(
+                str(record["next_text"]).strip()
+                if isinstance(record.get("next_text"), str) and str(record["next_text"]).strip()
+                else None
+            ),
+            collection_title=(
+                str(record["collection_title"]).strip()
+                if isinstance(record.get("collection_title"), str)
+                and str(record["collection_title"]).strip()
+                else None
+            ),
         )
         identity = (line.line_id, line.text_sha256)
         if identity in seen:
@@ -167,6 +187,48 @@ def collect_story_voice_lines(story_index, roles):
             "No installed same-speaker story audio found for: " + ", ".join(missing)
         )
     return tuple(lines), hashlib.sha256(payload).hexdigest()
+
+
+def affected_story_line_counts(story_index, roles):
+    """Count missing-source speakable lines by exact role and portrait."""
+    requested = {
+        normalize_character_name(_required_text(role, "Role")): _required_text(role, "Role")
+        for role in roles
+    }
+    try:
+        payload = Path(story_index).expanduser().resolve().read_bytes()
+        decoded = payload.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise StoryVoiceCandidateError(
+            f"Unable to read story coverage from {story_index}: {error}"
+        ) from error
+    character_counts = {role: 0 for role in requested.values()}
+    portrait_counts = {}
+    for number, raw in enumerate(decoded.splitlines(), start=1):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise StoryVoiceCandidateError(
+                f"Story index line {number} is invalid JSON: {error}"
+            ) from error
+        if not isinstance(record, dict) or record.get("record_type") != "line":
+            continue
+        key = normalize_character_name(str(record.get("voice_character") or ""))
+        role = requested.get(key)
+        if (
+            role is None
+            or record.get("speakable") is False
+            or record.get("source_audio_status") == "available"
+        ):
+            continue
+        portrait = (
+            str(record["portrait"]).strip()
+            if isinstance(record.get("portrait"), str) and str(record["portrait"]).strip()
+            else None
+        )
+        character_counts[role] += 1
+        portrait_counts[(role, portrait)] = portrait_counts.get((role, portrait), 0) + 1
+    return character_counts, portrait_counts
 
 
 def _bank_entries(bank_index):
@@ -233,6 +295,7 @@ def build_story_voice_candidates(
     story_index = resolve_story_index_path(story_index)
     bank_index_path = Path(bank_index_path).expanduser().resolve()
     lines, story_sha256 = collect_story_voice_lines(story_index, roles)
+    character_affected, portrait_affected = affected_story_line_counts(story_index, roles)
     try:
         bank_index_payload = bank_index_path.read_bytes()
         bank_index = validate_bank_index_document(json.loads(bank_index_payload.decode("utf-8")))
@@ -309,6 +372,8 @@ def build_story_voice_candidates(
                     "metrics": metrics_document,
                     "technical_pass": not metrics.technical_flags,
                     "manual_content_review_required": True,
+                    "affected_character_line_count": character_affected[character],
+                    "affected_portrait_line_count": portrait_affected.get((character, portrait), 0),
                 }
             )
 
@@ -346,6 +411,8 @@ def build_story_voice_candidates(
                         if value["technical_pass"] and not value["transcript_conflict"]
                     ][:3],
                     "manual_content_review_required": True,
+                    "affected_character_line_count": character_affected[character],
+                    "affected_portrait_line_count": portrait_affected.get((character, portrait), 0),
                 }
             )
         report = {

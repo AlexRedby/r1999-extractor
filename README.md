@@ -208,7 +208,7 @@ an audition set, not a voice manifest: every candidate remains marked for
 manual speaker, music/SFX and multiple-speaker review. Existing output is never
 replaced.
 
-The planned semi-automatic review contract, including transcript alignment,
+The semi-automatic review contract, including transcript alignment,
 non-speech/contamination evidence, portrait-aware clustering and checksum-bound
 human decisions, is documented in
 [`docs/reference-audition-automation.md`](docs/reference-audition-automation.md).
@@ -224,7 +224,24 @@ uv run r1999-story-voice-review /path/to/candidates/report.json \
 ```
 
 The adjacent `review.json` binds the exact report and reference hashes. A
-changed report or WAV fails closed instead of silently reusing a stale decision.
+changed WAV fails closed. Review v2 carries unchanged candidate decisions to a
+regenerated report by exact candidate/reference identity and archives changed
+candidates as invalidated evidence.
+
+For the report-driven Qt workflow, install the UI extra and open the same
+immutable report:
+
+```bash
+uv sync --extra ui
+uv run r1999-story-voice-review-ui /path/to/candidates/report.json
+```
+
+The fixed action row supports Play, Accept, Reject, Uncertain and previous/next
+pending navigation. `Space` plays, `Ctrl+Enter` accepts, `Ctrl+Backspace`
+rejects, `Ctrl+Shift+Enter` marks uncertain, and `Alt+Left` / `Alt+Right`
+navigate pending candidates. The table is read-only, so decision shortcuts do
+not start cell editing. A/B slots can retain and replay two candidates while
+the active filters change.
 
 If extraction artifacts were created while these tools lived in VNTTS, copy
 them into the extractor application-data directory without deleting or

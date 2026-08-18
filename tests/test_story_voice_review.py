@@ -79,7 +79,7 @@ class StoryVoiceReviewTest(unittest.TestCase):
             self.assertEqual(reopened.decisions[candidate.key]["decision"], "accept")
             self.assertEqual(reopened.decisions[candidate.key]["notes"], "Longer clean reference")
 
-    def test_changed_report_or_reference_invalidates_review(self):
+    def test_changed_report_reuses_exact_candidate_but_changed_reference_fails(self):
         with TemporaryDirectory() as directory:
             report, reference = self.make_report(directory)
             candidate = load_review_session(report).candidates[0]
@@ -88,13 +88,64 @@ class StoryVoiceReviewTest(unittest.TestCase):
             document = json.loads(report.read_text(encoding="utf-8"))
             document["generated_at"] = "changed"
             report.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
-            with self.assertRaisesRegex(StoryVoiceReviewError, "report changed"):
-                load_review_session(report)
+            reopened = load_review_session(report)
+            self.assertEqual(reopened.decisions[candidate.key]["decision"], "accept")
 
             report.unlink()
             report, reference = self.make_report(directory)
             reference.write_bytes(b"replacement")
             with self.assertRaisesRegex(StoryVoiceReviewError, "checksum changed"):
+                load_review_session(report)
+
+    def test_changed_candidate_is_archived_as_invalidated_evidence(self):
+        with TemporaryDirectory() as directory:
+            report, reference = self.make_report(directory)
+            candidate = load_review_session(report).candidates[0]
+            record_review_decision(report, candidate.key, "reject", notes="crying only")
+            document = json.loads(report.read_text(encoding="utf-8"))
+            reference.write_bytes(b"new exact candidate bytes")
+            document["candidates"][0]["reference_sha256"] = hashlib.sha256(
+                reference.read_bytes()
+            ).hexdigest()
+            report.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+
+            reopened = load_review_session(report)
+
+            self.assertEqual(reopened.pending_count, 1)
+            self.assertEqual(reopened.decisions, {})
+            self.assertEqual(len(reopened.invalidated_decisions), 1)
+            self.assertEqual(reopened.invalidated_decisions[0]["candidate_key"], candidate.key)
+
+    def test_changed_transcript_invalidates_decision_even_when_wav_is_unchanged(self):
+        with TemporaryDirectory() as directory:
+            report, _reference = self.make_report(directory)
+            candidate = load_review_session(report).candidates[0]
+            record_review_decision(report, candidate.key, "accept")
+            document = json.loads(report.read_text(encoding="utf-8"))
+            document["candidates"][0]["source_lines"][0]["text"] = "Changed evidence"
+            report.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+
+            reopened = load_review_session(report)
+
+            self.assertEqual(reopened.decisions, {})
+            self.assertEqual(len(reopened.invalidated_decisions), 1)
+
+    def test_legacy_review_still_fails_closed_on_report_change(self):
+        with TemporaryDirectory() as directory:
+            report, _reference = self.make_report(directory)
+            session = load_review_session(report)
+            review = {
+                "schema": "r1999.story-voice-reference-review",
+                "schema_version": 1,
+                "candidate_report_sha256": session.report_sha256,
+                "decisions": [],
+            }
+            session.review_path.write_text(json.dumps(review), encoding="utf-8")
+            document = json.loads(report.read_text(encoding="utf-8"))
+            document["generated_at"] = "changed"
+            report.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+
+            with self.assertRaisesRegex(StoryVoiceReviewError, "report changed"):
                 load_review_session(report)
 
     def test_reference_escape_is_rejected(self):

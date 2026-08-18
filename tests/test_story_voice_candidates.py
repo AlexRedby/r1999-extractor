@@ -9,6 +9,7 @@ from r1999extractor.story_audio import wwise_event_id
 from r1999extractor.story_voice_candidates import (
     BankSnapshot,
     StoryVoiceCandidateError,
+    affected_story_line_counts,
     build_story_voice_candidates,
     collect_story_voice_lines,
 )
@@ -29,6 +30,9 @@ def story_line(number, text, *, portrait="hero.png", media_id=10):
         "source_event": "play_hero_line",
         "source_bank": "hero_story.bnk",
         "source_media_ids": [media_id],
+        "previous_text": f"Before {number}",
+        "next_text": f"After {number}",
+        "collection_title": "Hero Story",
     }
 
 
@@ -125,6 +129,34 @@ class StoryVoiceCandidateTest(unittest.TestCase):
             with self.assertRaisesRegex(StoryVoiceCandidateError, "Missing"):
                 collect_story_voice_lines(story, ["Missing"])
 
+    def test_counts_only_missing_source_speakable_lines_by_exact_portrait(self):
+        with TemporaryDirectory() as directory:
+            story = write_story(
+                Path(directory) / "story.jsonl",
+                [
+                    story_line(1, "Installed."),
+                    {
+                        **story_line(2, "Missing adult."),
+                        "source_audio_status": "absent",
+                    },
+                    {
+                        **story_line(3, "Missing young.", portrait="young.png"),
+                        "source_audio_status": "unavailable",
+                    },
+                    {
+                        **story_line(4, "Not speakable."),
+                        "source_audio_status": "absent",
+                        "speakable": False,
+                    },
+                ],
+            )
+
+            characters, portraits = affected_story_line_counts(story, ["Hero"])
+
+        self.assertEqual(characters["Hero"], 2)
+        self.assertEqual(portraits[("Hero", "hero.png")], 1)
+        self.assertEqual(portraits[("Hero", "young.png")], 1)
+
     def test_normalized_quoted_display_variant_keeps_requested_role_identity(self):
         with TemporaryDirectory() as directory:
             line = story_line(1, "Exact role line.")
@@ -189,6 +221,8 @@ class StoryVoiceCandidateTest(unittest.TestCase):
         self.assertEqual(report["candidate_count"], 2)
         self.assertTrue(report["candidates"][0]["transcript_conflict"])
         self.assertTrue(report["candidates"][0]["manual_content_review_required"])
+        self.assertEqual(report["candidates"][0]["affected_character_line_count"], 0)
+        self.assertEqual(report["candidates"][0]["source_lines"][0]["previous_text"], "Before 1")
         self.assertEqual(
             report["candidates"][0]["metrics"]["path"],
             report["candidates"][0]["reference"],

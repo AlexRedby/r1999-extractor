@@ -16,7 +16,8 @@ from vntts_artifacts.file_integrity import sha256_file
 from r1999extractor.story_voice_candidates import REPORT_SCHEMA, REPORT_VERSION
 
 REVIEW_SCHEMA = "r1999.story-voice-reference-review"
-REVIEW_VERSION = 1
+REVIEW_VERSION = 2
+LEGACY_REVIEW_VERSION = 1
 REVIEW_DECISIONS = frozenset({"accept", "reject", "uncertain"})
 
 
@@ -38,6 +39,15 @@ class ReviewCandidate:
     transcript_conflict: bool
     recommended: bool
     transcripts: tuple[str, ...]
+    line_ids: tuple[str, ...]
+    duration_seconds: float | None
+    quality_score: int | None
+    technical_flags: tuple[str, ...]
+    contexts: tuple[tuple[str | None, str | None], ...]
+    collection_titles: tuple[str | None, ...]
+    affected_character_line_count: int | None
+    affected_portrait_line_count: int | None
+    evidence_sha256: str
 
 
 @dataclass(frozen=True)
@@ -47,6 +57,7 @@ class ReviewSession:
     review_path: Path
     candidates: tuple[ReviewCandidate, ...]
     decisions: dict[str, dict]
+    invalidated_decisions: tuple[dict, ...] = ()
 
     @property
     def pending_count(self):
@@ -124,6 +135,14 @@ def _load_candidates(report_path, report):
     for index, value in enumerate(values):
         if not isinstance(value, dict):
             raise StoryVoiceReviewError(f"Candidate {index} must be an object")
+        evidence_sha256 = hashlib.sha256(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         character = _required_text(value.get("character"), f"candidate {index} character")
         portrait = value.get("portrait")
         if portrait is not None and (not isinstance(portrait, str) or not portrait.strip()):
@@ -160,6 +179,46 @@ def _load_candidates(report_path, report):
         )
         if len(transcripts) != len(source_lines):
             raise StoryVoiceReviewError(f"Candidate {index} source line is invalid")
+        line_ids = tuple(
+            str(line.get("line_id") or "").strip()
+            for line in source_lines
+            if isinstance(line, dict)
+        )
+        contexts = tuple(
+            (
+                str(line.get("previous_text") or "").strip() or None,
+                str(line.get("next_text") or "").strip() or None,
+            )
+            for line in source_lines
+        )
+        collection_titles = tuple(
+            str(line.get("collection_title") or "").strip() or None for line in source_lines
+        )
+        affected_character_line_count = value.get("affected_character_line_count")
+        affected_portrait_line_count = value.get("affected_portrait_line_count")
+        for count, label in (
+            (affected_character_line_count, "affected character line count"),
+            (affected_portrait_line_count, "affected portrait line count"),
+        ):
+            if count is not None and (
+                isinstance(count, bool) or not isinstance(count, int) or count < 0
+            ):
+                raise StoryVoiceReviewError(f"Candidate {index} {label} is invalid")
+        metrics = value.get("metrics")
+        if metrics is not None and not isinstance(metrics, dict):
+            raise StoryVoiceReviewError(f"Candidate {index} metrics must be an object")
+        metrics = metrics or {}
+        duration_seconds = metrics.get("duration_seconds")
+        if not isinstance(duration_seconds, (int, float)) or isinstance(duration_seconds, bool):
+            duration_seconds = None
+        quality_score = metrics.get("quality_score")
+        if not isinstance(quality_score, int) or isinstance(quality_score, bool):
+            quality_score = None
+        technical_flags = metrics.get("technical_flags", [])
+        if not isinstance(technical_flags, list) or any(
+            not isinstance(flag, str) or not flag.strip() for flag in technical_flags
+        ):
+            raise StoryVoiceReviewError(f"Candidate {index} technical flags are invalid")
         key = _candidate_key(character, portrait, bank, media_id, reference_sha256)
         if key in seen:
             raise StoryVoiceReviewError(f"Duplicate candidate identity: {key}")
@@ -178,6 +237,17 @@ def _load_candidates(report_path, report):
                 transcript_conflict=value.get("transcript_conflict") is True,
                 recommended=(character, portrait, bank, media_id) in recommended,
                 transcripts=transcripts,
+                line_ids=line_ids,
+                duration_seconds=(
+                    float(duration_seconds) if duration_seconds is not None else None
+                ),
+                quality_score=quality_score,
+                technical_flags=tuple(flag.strip() for flag in technical_flags),
+                contexts=contexts,
+                collection_titles=collection_titles,
+                affected_character_line_count=affected_character_line_count,
+                affected_portrait_line_count=affected_portrait_line_count,
+                evidence_sha256=evidence_sha256,
             )
         )
     return tuple(candidates)
@@ -195,11 +265,20 @@ def load_review_session(report_path, review_path=None):
         else Path(review_path).expanduser().resolve()
     )
     decisions = {}
+    invalidated_decisions = []
     if review_path.exists():
         _path, _payload, review = _read_json_snapshot(review_path, "candidate review")
-        if review.get("schema") != REVIEW_SCHEMA or review.get("schema_version") != REVIEW_VERSION:
+        version = review.get("schema_version")
+        if review.get("schema") != REVIEW_SCHEMA or version not in {
+            LEGACY_REVIEW_VERSION,
+            REVIEW_VERSION,
+        }:
             raise StoryVoiceReviewError("Unsupported candidate review schema")
-        if review.get("candidate_report_sha256") != report_sha256:
+        _sha256_text(review.get("candidate_report_sha256"), "candidate review report hash")
+        if (
+            version == LEGACY_REVIEW_VERSION
+            and review.get("candidate_report_sha256") != report_sha256
+        ):
             raise StoryVoiceReviewError("Candidate report changed since this review was recorded")
         known = {candidate.key: candidate for candidate in candidates}
         values = review.get("decisions")
@@ -210,19 +289,53 @@ def load_review_session(report_path, review_path=None):
                 raise StoryVoiceReviewError(f"Review decision {index} must be an object")
             key = _required_text(value.get("candidate_key"), f"decision {index} key")
             candidate = known.get(key)
-            if candidate is None or key in decisions:
-                raise StoryVoiceReviewError(f"Review decision {index} candidate is invalid")
-            if value.get("reference_sha256") != candidate.reference_sha256:
-                raise StoryVoiceReviewError(f"Review decision {index} reference changed")
+            if key in decisions:
+                raise StoryVoiceReviewError(f"Review decision {index} candidate is duplicated")
             if value.get("decision") not in REVIEW_DECISIONS:
                 raise StoryVoiceReviewError(f"Review decision {index} value is invalid")
+            reference_sha256 = _sha256_text(
+                value.get("reference_sha256"), f"decision {index} reference hash"
+            )
+            if candidate is None:
+                if version == LEGACY_REVIEW_VERSION:
+                    raise StoryVoiceReviewError(f"Review decision {index} candidate is invalid")
+                invalidated_decisions.append(value)
+                continue
+            if reference_sha256 != candidate.reference_sha256:
+                raise StoryVoiceReviewError(f"Review decision {index} reference changed")
+            if version == REVIEW_VERSION:
+                evidence_sha256 = _sha256_text(
+                    value.get("candidate_evidence_sha256"),
+                    f"decision {index} evidence hash",
+                )
+                if evidence_sha256 != candidate.evidence_sha256:
+                    invalidated_decisions.append(value)
+                    continue
             decisions[key] = value
+        archived = review.get("invalidated_decisions", [])
+        if version == REVIEW_VERSION:
+            if not isinstance(archived, list) or any(
+                not isinstance(value, dict) for value in archived
+            ):
+                raise StoryVoiceReviewError("Invalidated review decisions must be a list")
+            for index, value in enumerate(archived):
+                _required_text(value.get("candidate_key"), f"invalidated decision {index} key")
+                _sha256_text(
+                    value.get("reference_sha256"),
+                    f"invalidated decision {index} reference hash",
+                )
+                if value.get("decision") not in REVIEW_DECISIONS:
+                    raise StoryVoiceReviewError(
+                        f"Invalidated review decision {index} value is invalid"
+                    )
+            invalidated_decisions.extend(archived)
     return ReviewSession(
         report_path=report_path,
         report_sha256=report_sha256,
         review_path=review_path,
         candidates=candidates,
         decisions=decisions,
+        invalidated_decisions=tuple(invalidated_decisions),
     )
 
 
@@ -246,6 +359,7 @@ def record_review_decision(report_path, candidate_key, decision, *, notes="", re
         "media_id": candidate.media_id,
         "reference": candidate.reference_relative,
         "reference_sha256": candidate.reference_sha256,
+        "candidate_evidence_sha256": candidate.evidence_sha256,
         "decision": decision,
         "notes": notes.strip(),
         "decided_at": datetime.now(timezone.utc).isoformat(),
@@ -254,13 +368,23 @@ def record_review_decision(report_path, candidate_key, decision, *, notes="", re
         raise StoryVoiceReviewError("Candidate report changed before the decision was saved")
     if sha256_file(candidate.reference) != candidate.reference_sha256:
         raise StoryVoiceReviewError("Candidate reference changed before the decision was saved")
+    current_decisions = []
+    for key in sorted(decisions):
+        current = next(item for item in session.candidates if item.key == key)
+        current_decisions.append(
+            {
+                **decisions[key],
+                "candidate_evidence_sha256": current.evidence_sha256,
+            }
+        )
     document = {
         "schema": REVIEW_SCHEMA,
         "schema_version": REVIEW_VERSION,
         "candidate_report": session.report_path.name,
         "candidate_report_sha256": session.report_sha256,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "decisions": [decisions[key] for key in sorted(decisions)],
+        "decisions": current_decisions,
+        "invalidated_decisions": list(session.invalidated_decisions),
     }
     atomic_write_json(session.review_path, document)
     return load_review_session(session.report_path, session.review_path)

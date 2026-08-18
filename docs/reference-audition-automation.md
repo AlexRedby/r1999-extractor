@@ -29,10 +29,12 @@ The extractor can then calculate evidence that ranks or rejects candidates:
 
 ## Checksum-bound human decisions
 
-A report-driven review interface should show the expected transcript, adjacent
-story context, portrait, bank, media ID, technical/ASR/contamination evidence,
-cluster membership and affected line count. It should support Play, Accept,
-Reject and Uncertain, keyboard navigation and A/B comparison between groups.
+The report-driven Qt interface shows the expected transcript, adjacent story
+context, portrait, bank, media ID, current technical evidence and missing-source
+coverage counts for both the character and exact portrait. It supports Play,
+Accept, Reject and Uncertain, keyboard navigation and retained A/B candidates.
+Its fixed controls do not move during playback, the table cannot enter cell
+editing, and playback uses checksum-verified bytes held in memory.
 
 Decisions belong in a versioned review document that binds the candidate report
 SHA-256 and every selected reference SHA-256. Reopening an unchanged report is
@@ -40,13 +42,20 @@ idempotent. Changed report or WAV bytes invalidate only affected decisions.
 Rejected and uncertain candidates remain explicit evidence; they are never
 deleted or silently re-proposed.
 
-The first implementation slice is `r1999-story-voice-review`. It validates the
-entire immutable candidate inventory, emits stable candidate keys and persists
-Accept/Reject/Uncertain decisions in an adjacent `review.json`. The document is
-atomically written and exact-report-bound; v1 deliberately fails closed on any
-report change. Selective per-candidate rebasing remains part of the planned UI
-workflow and must prove unchanged candidate identity before carrying a decision
-forward.
+`r1999-story-voice-review` validates the entire immutable candidate inventory,
+emits stable candidate keys and persists Accept/Reject/Uncertain decisions in
+an adjacent `review.json`. The document is atomically written. Legacy v1
+reviews deliberately fail closed on any report change. Review v2 carries a
+decision to a regenerated report only when the candidate key and exact WAV
+SHA-256 remain identical; changed or removed candidates are retained separately
+as invalidated evidence. `r1999-story-voice-review-ui` is the interactive view
+over the same authority and never edits the candidate report or WAVs.
+
+Coverage counts mean speakable story-index lines for the exact character whose
+source audio is not currently available. The portrait count is the strict
+subset matching the candidate portrait; neither count promises that variants
+may be merged. Context comes from the source row's checksum-bound previous and
+next story text.
 
 The first accepted clip in each ambiguous portrait/bank cluster is a human
 anchor. After that, strict same-cluster candidates may be automatically ranked,

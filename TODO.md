@@ -7,13 +7,6 @@ in project documentation.
 
 ## Source voice coverage
 
-- [ ] Build a report-driven, checksum-bound Character Story audition workflow
-      following `docs/reference-audition-automation.md`. Persist
-      Accept/Reject/Uncertain decisions against exact report/reference hashes;
-      show transcript, context, portrait/bank group, technical evidence and
-      affected line count; support keyboard playback/navigation and A/B group
-      comparison. Reuse unchanged decisions and invalidate only changed WAVs.
-
 - [ ] Add conservative automatic evidence to the audition report: detect
       speech versus crying/non-verbal audio, align local ASR with the exact game
       transcript, estimate music/SFX and speaker count, and cluster speaker

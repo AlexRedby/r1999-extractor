@@ -11,6 +11,14 @@ def audition_main(arguments=None):
     )
 
 
+def story_voice_review_main(arguments=None):
+    return _run_optional_qt_ui(
+        "r1999extractor.story_voice_review_ui",
+        arguments,
+        "Character Story voice review",
+    )
+
+
 def _run_optional_qt_ui(module_name, arguments, label):
     try:
         entrypoint = import_module(module_name).main
