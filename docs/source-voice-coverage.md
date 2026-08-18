@@ -260,6 +260,11 @@ must display the missing-asset placeholder. The review UI accepts an explicit
 portrait directory, renders the selected exact PNG, and rechecks its snapshot
 before persisting a decision; portrait pixels remain supporting identity
 evidence and never replace the report's checksum-bound candidate key.
+The 11 recovered PNGs were copied without replacement to
+`reverse1999/story-voice-portraits/character-story-20260818` in extractor
+app-data. Their sorted `filename + NUL + file SHA-256 + newline` inventory
+SHA-256 is
+`d1e35cd761f7f1d9060a88bae09e9f663de7ecf4766530e070a90dba8094495a`.
 
 No exact installed same-speaker route was found for `Poacher I` (13 blocked
 lines) or `Poacher II` (nine). Do not merge either numbered role with the
