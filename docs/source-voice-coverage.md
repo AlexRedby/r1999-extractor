@@ -239,6 +239,18 @@ ordinary `637901.png` / `npcnoname322` group without content review. The
 audition set lives in the ignored voice-pack data directory; an earlier report
 with non-portable staging paths is preserved separately as superseded evidence.
 
+The first user listening pass selected Aderyn's Father media `209566863`,
+Dobharchú media `951691760` and Poacher media `289048377`. Exact re-import from
+the original banks reproduced the audition report's source and normalized WAV
+hashes. The shorter Dobharchú media `875779076` remains a clean reserve. Those
+three manifest entries cover 55 lines in the current VNTTS Character Story
+queue. Aderyn media `369040295` and `172299031` are rejected because they
+contain only crying. The reviewer distinguished the `hero3146` candidates from
+the `npcnoname326` candidates as different voice presentations, so the groups
+remain separate rather than becoming one Aderyn manifest identity. Mrs. Owen
+media `599773947` is not approved: the voice sounded usable, but its speech was
+not intelligible enough for a cloning reference.
+
 No exact installed same-speaker route was found for `Poacher I` (13 blocked
 lines) or `Poacher II` (nine). Do not merge either numbered role with the
 separate `Poacher` identity merely because that role has one installed clip.

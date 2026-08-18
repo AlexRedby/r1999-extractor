@@ -7,15 +7,15 @@ in project documentation.
 
 ## Source voice coverage
 
-- [ ] Listen to and decide the checksum-bound Character Story audition set,
-      then import only accepted references for Aderyn, Dobharchú, Mrs. Owen,
-      Hotelier, Poacher and Aderyn's Father and re-run VNTTS preflight. The
-      source/index/bank/media extraction is complete: 53 candidates across 19
-      portrait/bank groups, 12 objective technical passes and two transcript
-      conflicts. Preserve Aderyn variants and the anomalous Mrs. Owen group;
-      Hotelier has no minimum-duration pass. Do not merge `Poacher I`, `Poacher
-      II` or Glyndŵr or treat configured-unavailable audio as installed. Exact
-      hashes and blockers are in `docs/source-voice-coverage.md`.
+- [ ] Finish the checksum-bound Character Story audition for Aderyn, Mrs. Owen
+      and Hotelier. Aderyn's Father, Dobharchú and Poacher have been imported
+      from exact user-selected media into the VNTTS voice manifest. Preserve
+      Aderyn's `hero3146` and `npcnoname326` portrait variants; two crying-only
+      candidates are rejected. Mrs. Owen remains uncertain because the selected
+      speech was not intelligible to the reviewer, and Hotelier has no
+      minimum-duration pass. Do not merge `Poacher I`, `Poacher II` or Glyndŵr
+      or treat configured-unavailable audio as installed. Exact hashes and
+      blockers are in `docs/source-voice-coverage.md`.
 
 - [ ] Add or explicitly assign references for the remaining 51 patch 3.7 lines
       whose 15 speakers are not covered by the current voice manifest. Do not
