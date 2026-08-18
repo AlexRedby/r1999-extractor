@@ -27,6 +27,21 @@ The extractor can then calculate evidence that ranks or rejects candidates:
 6. Coverage impact, so review starts with groups that unblock the most queued
    lines rather than scanning every extracted WAV.
 
+`r1999-story-voice-evidence` implements these as a separate checksum-bound
+sidecar. PCM frame activity, zero crossings and spectral flatness are always
+available. An explicitly supplied local Whisper model adds transcript,
+similarity, word error rate and non-speech markers. An explicitly supplied
+local WavLM x-vector model adds within-clip segment consistency and pairwise
+similarity only inside the exact character/portrait/bank group. Model-directory
+bytes are bound by a tree SHA-256; model loading is offline-only.
+
+The acoustic rules are heuristics, not classifiers of identity. Repetitive
+laughter/vocalization or an ASR non-speech marker with no matching lexical
+transcript may become an obvious-rejection candidate. Low ASR similarity,
+broadband-noise risk, a possible speaker change or an embedding outlier only
+changes review priority. Every result retains the `advisory-only` policy, and
+none can approve a clip, merge portraits or create a manifest entry.
+
 ## Checksum-bound human decisions
 
 The report-driven Qt interface shows the expected transcript, adjacent story

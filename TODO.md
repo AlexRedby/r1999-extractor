@@ -7,13 +7,6 @@ in project documentation.
 
 ## Source voice coverage
 
-- [ ] Add conservative automatic evidence to the audition report: detect
-      speech versus crying/non-verbal audio, align local ASR with the exact game
-      transcript, estimate music/SFX and speaker count, and cluster speaker
-      embeddings within exact character/portrait/bank groups. Use this evidence
-      to reject obvious failures and prioritize review, never to merge variants
-      or auto-create a new voice identity without one human-approved anchor.
-
 - [ ] Finish the checksum-bound Character Story audition for Aderyn, Mrs. Owen
       and Hotelier. Aderyn's Father, Dobharchú and Poacher have been imported
       from exact user-selected media into the VNTTS voice manifest. Preserve

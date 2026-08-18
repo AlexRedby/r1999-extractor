@@ -243,6 +243,22 @@ navigate pending candidates. The table is read-only, so decision shortcuts do
 not start cell editing. A/B slots can retain and replay two candidates while
 the active filters change.
 
+Generate an optional advisory sidecar before opening the UI:
+
+```bash
+uv run r1999-story-voice-evidence /path/to/candidates/report.json \
+  --whisper-model /path/to/an-existing-local-whisper-model \
+  --speaker-model /path/to/an-existing-local-wavlm-xvector-model
+uv run r1999-story-voice-review-ui /path/to/candidates/report.json
+```
+
+No model is downloaded. Whisper records exact-transcript similarity and word
+error rate; PCM heuristics record activity/noise risk; WavLM, when supplied,
+records within-clip segment consistency and exact character/portrait/bank group
+outliers. The UI prioritizes obvious non-speech and outlier risks but never
+turns any automatic result into speaker approval. Omit either model to leave
+that evidence explicitly `not-run`.
+
 If extraction artifacts were created while these tools lived in VNTTS, copy
 them into the extractor application-data directory without deleting or
 overwriting the originals:

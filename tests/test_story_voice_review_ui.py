@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from r1999extractor.story_voice_candidates import REPORT_SCHEMA, REPORT_VERSION
+from r1999extractor.story_voice_evidence import analyze_story_voice_evidence
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -217,6 +218,31 @@ class StoryVoiceReviewDialogTest(unittest.TestCase):
 
         self.assertIn("checksum changed", self.dialog.status.text())
         self.assertFalse(self.dialog.session.decisions.get(candidate.key))
+
+    def test_bound_automatic_evidence_is_visible_and_filterable(self):
+        self.dialog.close()
+        self.dialog.deleteLater()
+        self.application.processEvents()
+        analyze_story_voice_evidence(
+            self.report,
+            self.root / "evidence.json",
+            transcriber=lambda path: (
+                "[noise]" if Path(path).stem == "10" else "Evidence for Aderyn"
+            ),
+        )
+        self.dialog = StoryVoiceReviewDialog(
+            self.report,
+            player_factory=_Player,
+            audio_output_factory=_AudioOutput,
+        )
+        self.dialog.recommended_only.setChecked(False)
+        self.dialog.evidence_filter.setCurrentText("Obvious reject")
+
+        self.assertEqual(self.dialog.table.rowCount(), 1)
+        self.assertIn("OBVIOUS REJECT", self.dialog.table.item(0, 6).text())
+        self.dialog.evidence_filter.setCurrentText("ASR mismatch")
+        self.assertEqual(self.dialog.table.rowCount(), 1)
+        self.assertIn("Automatic advisory evidence", self.dialog.details.text())
 
 
 if __name__ == "__main__":

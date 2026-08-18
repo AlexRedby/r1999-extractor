@@ -26,6 +26,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from r1999extractor.story_voice_evidence import (
+    StoryVoiceEvidenceError,
+    load_story_voice_evidence,
+)
 from r1999extractor.story_voice_review import (
     ReviewCandidate,
     StoryVoiceReviewError,
@@ -41,9 +45,11 @@ class StoryVoiceReviewDialog(QDialog):
         self,
         report_path,
         review_path=None,
+        evidence_path=None,
         *,
         session_loader=load_review_session,
         decision_recorder=record_review_decision,
+        evidence_loader=load_story_voice_evidence,
         player_factory=QMediaPlayer,
         audio_output_factory=QAudioOutput,
         parent=None,
@@ -54,6 +60,7 @@ class StoryVoiceReviewDialog(QDialog):
         self._session_loader = session_loader
         self._decision_recorder = decision_recorder
         self.session = self._session_loader(self.report_path, self.review_path)
+        self.evidence_path, self.evidence = evidence_loader(self.report_path, evidence_path)
         self._visible_candidates: tuple[ReviewCandidate, ...] = ()
         self._playback_buffer = None
         self._ab_keys = {"A": None, "B": None}
@@ -69,12 +76,17 @@ class StoryVoiceReviewDialog(QDialog):
         self.decision_filter.addItems(["All", "Pending", "Accepted", "Rejected", "Uncertain"])
         self.recommended_only = QCheckBox("Recommended first pass only")
         self.recommended_only.setChecked(True)
+        self.evidence_filter = QComboBox()
+        self.evidence_filter.addItems(
+            ["All evidence", "Obvious reject", "Speaker outlier", "ASR mismatch", "Not analyzed"]
+        )
 
         filters = QHBoxLayout()
         filters.addWidget(QLabel("Find"))
         filters.addWidget(self.search, 3)
         filters.addWidget(QLabel("Decision"))
         filters.addWidget(self.decision_filter, 1)
+        filters.addWidget(self.evidence_filter, 1)
         filters.addWidget(self.recommended_only)
 
         self.table = QTableWidget(0, 8)
@@ -161,6 +173,7 @@ class StoryVoiceReviewDialog(QDialog):
 
         self.search.textChanged.connect(self.refresh)
         self.decision_filter.currentIndexChanged.connect(self.refresh)
+        self.evidence_filter.currentIndexChanged.connect(self.refresh)
         self.recommended_only.toggled.connect(self.refresh)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.previous_pending.clicked.connect(lambda: self._move_pending(-1))
@@ -197,6 +210,26 @@ class StoryVoiceReviewDialog(QDialog):
     def _candidate_by_key(self, key):
         return next((item for item in self.session.candidates if item.key == key), None)
 
+    def _candidate_evidence(self, candidate):
+        return self.evidence.get(candidate.key, {})
+
+    def _evidence_summary(self, candidate):
+        evidence = self._candidate_evidence(candidate)
+        if not evidence:
+            return "not analyzed"
+        content = evidence.get("content", {})
+        speaker = evidence.get("speaker", {})
+        asr = evidence.get("asr", {})
+        values = [str(content.get("classification") or "uncertain")]
+        if content.get("obvious_rejection_candidate") is True:
+            values.append("OBVIOUS REJECT")
+        group = speaker.get("group_similarity", {})
+        if group.get("outlier_risk") is True:
+            values.append("SPEAKER OUTLIER")
+        if asr.get("status") == "complete":
+            values.append(f"ASR {float(asr.get('best_similarity', 0.0)):.2f}")
+        return "; ".join(values)
+
     def _selected_candidate(self):
         row = self.table.currentRow()
         if row < 0 or row >= len(self._visible_candidates):
@@ -209,6 +242,7 @@ class StoryVoiceReviewDialog(QDialog):
             selected_key = None if selected is None else selected.key
         query = self.search.text().strip().casefold()
         decision_filter = self.decision_filter.currentText()
+        evidence_filter = self.evidence_filter.currentText()
 
         def included(candidate):
             decision = self._candidate_decision(candidate)
@@ -222,6 +256,26 @@ class StoryVoiceReviewDialog(QDialog):
                 return False
             if decision_filter == "Uncertain" and decision != "uncertain":
                 return False
+            evidence = self._candidate_evidence(candidate)
+            content = evidence.get("content", {})
+            speaker = evidence.get("speaker", {})
+            asr = evidence.get("asr", {})
+            if (
+                evidence_filter == "Obvious reject"
+                and content.get("obvious_rejection_candidate") is not True
+            ):
+                return False
+            if (
+                evidence_filter == "Speaker outlier"
+                and speaker.get("group_similarity", {}).get("outlier_risk") is not True
+            ):
+                return False
+            if evidence_filter == "ASR mismatch" and not (
+                asr.get("status") == "complete" and float(asr.get("best_similarity", 0.0)) < 0.58
+            ):
+                return False
+            if evidence_filter == "Not analyzed" and evidence:
+                return False
             searchable = " ".join(
                 (
                     candidate.character,
@@ -233,8 +287,19 @@ class StoryVoiceReviewDialog(QDialog):
             ).casefold()
             return not query or query in searchable
 
+        def priority(candidate):
+            evidence = self._candidate_evidence(candidate)
+            obvious = evidence.get("content", {}).get("obvious_rejection_candidate") is True
+            outlier = (
+                evidence.get("speaker", {}).get("group_similarity", {}).get("outlier_risk") is True
+            )
+            return (not obvious, not outlier, not candidate.recommended)
+
         self._visible_candidates = tuple(
-            candidate for candidate in self.session.candidates if included(candidate)
+            sorted(
+                (candidate for candidate in self.session.candidates if included(candidate)),
+                key=priority,
+            )
         )
         self.table.blockSignals(True)
         try:
@@ -254,7 +319,10 @@ class StoryVoiceReviewDialog(QDialog):
                         if candidate.duration_seconds is None
                         else f"{candidate.duration_seconds:.2f}s"
                     ),
-                    f"{candidate.quality_score if candidate.quality_score is not None else '-'} / {flags}",
+                    (
+                        f"{candidate.quality_score if candidate.quality_score is not None else '-'} / "
+                        f"{flags}; {self._evidence_summary(candidate)}"
+                    ),
                     " | ".join(candidate.transcripts),
                 )
                 for column, value in enumerate(values):
@@ -273,6 +341,7 @@ class StoryVoiceReviewDialog(QDialog):
             f"Candidates: {len(self.session.candidates)} | Decisions: "
             f"{len(self.session.decisions)} | Pending: {self.session.pending_count} | "
             f"Invalidated evidence: {len(self.session.invalidated_decisions)} | "
+            f"Automatic evidence: {len(self.evidence)} | "
             f"Visible: {len(self._visible_candidates)}"
         )
         self._selection_changed()
@@ -313,6 +382,20 @@ class StoryVoiceReviewDialog(QDialog):
                 f"{candidate.affected_portrait_line_count} for this exact portrait"
             )
         )
+        evidence = self._candidate_evidence(candidate)
+        automatic = "not analyzed"
+        if evidence:
+            asr = evidence["asr"]
+            content = evidence["content"]
+            speaker = evidence["speaker"]
+            automatic = (
+                f"classification={content.get('classification')}; "
+                f"reasons={', '.join(content.get('reasons', [])) or 'none'}; "
+                f"ASR={asr.get('transcript', asr.get('status'))!r}; "
+                f"WER={asr.get('best_word_error_rate', '-')}; "
+                f"speaker_count={speaker.get('speaker_count_estimate', speaker.get('status'))}; "
+                f"group={speaker.get('group_similarity', {}) or 'not available'}"
+            )
         self.details.setText(
             f"Character: {candidate.character} | Portrait: {candidate.portrait or '-'} | "
             f"Bank: {candidate.source_bank} | Media: {candidate.media_id} | "
@@ -320,6 +403,7 @@ class StoryVoiceReviewDialog(QDialog):
             f"Transcript: {' | '.join(candidate.transcripts)}\n"
             f"Context: {' | '.join(context_parts) or 'not recorded in this report'}\n"
             f"Potential coverage: {coverage}\n"
+            f"Automatic advisory evidence: {automatic}\n"
             f"Technical: {'pass' if candidate.technical_pass else 'needs attention'}; "
             f"flags: {', '.join(candidate.technical_flags) or 'none'}; "
             f"transcript conflict: {'yes' if candidate.transcript_conflict else 'no'}; "
@@ -444,6 +528,7 @@ def create_parser():
     )
     parser.add_argument("report", type=Path)
     parser.add_argument("--review", type=Path)
+    parser.add_argument("--evidence", type=Path)
     return parser
 
 
@@ -451,8 +536,8 @@ def main(arguments=None):
     options = create_parser().parse_args(arguments)
     application = QApplication.instance() or QApplication(sys.argv[:1])
     try:
-        dialog = StoryVoiceReviewDialog(options.report, options.review)
-    except StoryVoiceReviewError as error:
+        dialog = StoryVoiceReviewDialog(options.report, options.review, options.evidence)
+    except (StoryVoiceEvidenceError, StoryVoiceReviewError) as error:
         QMessageBox.critical(None, "Character Story voice review", str(error))
         return 1
     dialog.show()
