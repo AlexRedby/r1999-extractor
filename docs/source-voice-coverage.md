@@ -245,11 +245,16 @@ the original banks reproduced the audition report's source and normalized WAV
 hashes. The shorter Dobharchú media `875779076` remains a clean reserve. Those
 three manifest entries cover 55 lines in the current VNTTS Character Story
 queue. Aderyn media `369040295` and `172299031` are rejected because they
-contain only crying. The reviewer distinguished the `hero3146` candidates from
-the `npcnoname326` candidates as different voice presentations, so the groups
-remain separate rather than becoming one Aderyn manifest identity. Mrs. Owen
-media `599773947` is not approved: the voice sounded usable, but its speech was
-not intelligible enough for a cloning reference.
+contain only crying. Aderyn is Rhiannon in childhood, but source identity and
+life-stage remain separate from the adult synthesis voice. The reviewer
+accepted media `477089679` from portrait `533706` as the child-voice anchor
+(normalized WAV SHA-256
+`49a0a42bc2cbac573ab0a0518e54edfb8c59709f76feb64f5cc41e7fd99e42b8`).
+That decision applies to the exact portrait/bank group only; it does not merge
+the remaining `hero3146` and `npcnoname326` age/portrait variants or authorize
+the adult Rhiannon voice for them. Mrs. Owen media `599773947` is not approved:
+the voice sounded usable, but its speech was not intelligible enough for a
+cloning reference.
 
 For the remaining Aderyn, Mrs. Owen and Hotelier audition, a read-only scan of
 all 7,018 installed iOS bundles recovered 11 of the 12 exact portrait sprites:
