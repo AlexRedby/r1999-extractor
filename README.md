@@ -213,6 +213,19 @@ non-speech/contamination evidence, portrait-aware clustering and checksum-bound
 human decisions, is documented in
 [`docs/reference-audition-automation.md`](docs/reference-audition-automation.md).
 
+Record or inspect checksum-bound decisions without editing the immutable
+candidate report:
+
+```bash
+uv run r1999-story-voice-review /path/to/candidates/report.json
+uv run r1999-story-voice-review /path/to/candidates/report.json \
+  --candidate-key SHA256_KEY --decision uncertain \
+  --notes "Different portrait voice; keep separate"
+```
+
+The adjacent `review.json` binds the exact report and reference hashes. A
+changed report or WAV fails closed instead of silently reusing a stale decision.
+
 If extraction artifacts were created while these tools lived in VNTTS, copy
 them into the extractor application-data directory without deleting or
 overwriting the originals:

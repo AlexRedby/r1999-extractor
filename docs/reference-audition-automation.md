@@ -40,6 +40,14 @@ idempotent. Changed report or WAV bytes invalidate only affected decisions.
 Rejected and uncertain candidates remain explicit evidence; they are never
 deleted or silently re-proposed.
 
+The first implementation slice is `r1999-story-voice-review`. It validates the
+entire immutable candidate inventory, emits stable candidate keys and persists
+Accept/Reject/Uncertain decisions in an adjacent `review.json`. The document is
+atomically written and exact-report-bound; v1 deliberately fails closed on any
+report change. Selective per-candidate rebasing remains part of the planned UI
+workflow and must prove unchanged candidate identity before carrying a decision
+forward.
+
 The first accepted clip in each ambiguous portrait/bank cluster is a human
 anchor. After that, strict same-cluster candidates may be automatically ranked,
 but importing a new voice identity still requires either an accepted anchor or
