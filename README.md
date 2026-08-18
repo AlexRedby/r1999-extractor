@@ -208,6 +208,11 @@ an audition set, not a voice manifest: every candidate remains marked for
 manual speaker, music/SFX and multiple-speaker review. Existing output is never
 replaced.
 
+The planned semi-automatic review contract, including transcript alignment,
+non-speech/contamination evidence, portrait-aware clustering and checksum-bound
+human decisions, is documented in
+[`docs/reference-audition-automation.md`](docs/reference-audition-automation.md).
+
 If extraction artifacts were created while these tools lived in VNTTS, copy
 them into the extractor application-data directory without deleting or
 overwriting the originals:
