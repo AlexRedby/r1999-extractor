@@ -41,7 +41,11 @@ from r1999extractor.wwise import (
 )
 
 REPORT_SCHEMA = "r1999.story-voice-reference-candidates"
-REPORT_VERSION = 1
+REPORT_VERSION = 2
+SUPPORTED_REPORT_VERSIONS = frozenset({1, REPORT_VERSION})
+
+STORY_LINE_ROUTE = "story_line_route"
+EXACT_BANK_UNROUTED_MEDIA = "exact_bank_unrouted_media"
 
 
 class StoryVoiceCandidateError(RuntimeError):
@@ -290,6 +294,7 @@ def build_story_voice_candidates(
     bank_loader=snapshot_bank,
     media_decoder=decode_reference_data,
     analyzer=analyze_voice_reference,
+    include_all_bank_media=False,
 ):
     """Publish a non-authoritative audition set without changing a voice manifest."""
     story_index = resolve_story_index_path(story_index)
@@ -331,6 +336,28 @@ def build_story_voice_candidates(
                 key = (line.character, line.portrait, line.source_bank, media_id)
                 grouped.setdefault(key, []).append(line)
 
+        if include_all_bank_media:
+            identities_by_bank = {}
+            for line in lines:
+                identity = (line.character, line.portrait, line.source_bank)
+                identities_by_bank.setdefault(line.source_bank, set()).add(identity)
+            for bank, identities in identities_by_bank.items():
+                if len(identities) != 1:
+                    rendered = ", ".join(
+                        f"{character!r}/{portrait!r}"
+                        for character, portrait, _bank in sorted(
+                            identities,
+                            key=lambda value: tuple(str(part or "").casefold() for part in value),
+                        )
+                    )
+                    raise StoryVoiceCandidateError(
+                        "--include-all-bank-media requires one exact role/portrait "
+                        f"identity per bank; {bank} maps to {rendered}"
+                    )
+                character, portrait, _bank = next(iter(identities))
+                for media_id in snapshots[bank].media:
+                    grouped.setdefault((character, portrait, bank, media_id), [])
+
         candidates = []
         for (character, portrait, bank, media_id), source_lines in sorted(
             grouped.items(),
@@ -346,6 +373,13 @@ def build_story_voice_candidates(
             )
             relative = Path("references") / group_slug / f"{group_slug}.wav"
             snapshot = snapshots[bank]
+            event_ids = sorted(
+                event_id for event_id, media_ids in snapshot.routes.items() if media_id in media_ids
+            )
+            if not event_ids:
+                raise StoryVoiceCandidateError(
+                    f"Embedded media {media_id} has no exact event route in {bank}"
+                )
             imported = media_decoder(
                 snapshot.media[media_id],
                 staging / relative,
@@ -357,6 +391,7 @@ def build_story_voice_candidates(
             metrics_document = asdict(metrics)
             metrics_document["path"] = relative.as_posix()
             text_hashes = sorted({line.text_sha256 for line in source_lines})
+            candidate_origin = STORY_LINE_ROUTE if source_lines else EXACT_BANK_UNROUTED_MEDIA
             candidates.append(
                 {
                     "character": character,
@@ -365,6 +400,8 @@ def build_story_voice_candidates(
                     "source_bank_sha256": snapshot.sha256,
                     "media_id": media_id,
                     "source_sha256": imported.source_sha256,
+                    "candidate_origin": candidate_origin,
+                    "source_event_ids": event_ids,
                     "reference": relative.as_posix(),
                     "reference_sha256": imported.reference_sha256,
                     "source_lines": [asdict(line) for line in source_lines],
@@ -477,6 +514,14 @@ def create_parser():
     parser.add_argument("--bank-index", type=Path, default=default_bank_index)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--decoder", default="vgmstream-cli")
+    parser.add_argument(
+        "--include-all-bank-media",
+        action="store_true",
+        help=(
+            "Include every event-routed medium from a bank only when that bank "
+            "maps to one requested role/portrait identity"
+        ),
+    )
     return parser
 
 
@@ -489,6 +534,7 @@ def main(arguments=None):
             options.roles,
             options.output,
             decoder=options.decoder,
+            include_all_bank_media=options.include_all_bank_media,
         )
     except (
         AudioConversionError,

@@ -4,7 +4,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from r1999extractor.story_voice_candidates import REPORT_SCHEMA, REPORT_VERSION
+from r1999extractor.story_voice_candidates import (
+    EXACT_BANK_UNROUTED_MEDIA,
+    REPORT_SCHEMA,
+    REPORT_VERSION,
+    STORY_LINE_ROUTE,
+)
 from r1999extractor.story_voice_review import (
     StoryVoiceReviewError,
     load_review_session,
@@ -37,6 +42,8 @@ class StoryVoiceReviewTest(unittest.TestCase):
                     "portrait": "534704.png",
                     "source_bank": "voice.bnk",
                     "media_id": 951691760,
+                    "candidate_origin": STORY_LINE_ROUTE,
+                    "source_event_ids": [1234],
                     "reference": "references/voice.wav",
                     "reference_sha256": reference_sha256,
                     "technical_pass": True,
@@ -48,6 +55,36 @@ class StoryVoiceReviewTest(unittest.TestCase):
         path = root / "report.json"
         path.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
         return path, reference
+
+    def test_unrouted_exact_bank_candidate_requires_no_invented_transcript(self):
+        with TemporaryDirectory() as directory:
+            report, _reference = self.make_report(directory)
+            document = json.loads(report.read_text(encoding="utf-8"))
+            candidate = document["candidates"][0]
+            candidate["candidate_origin"] = EXACT_BANK_UNROUTED_MEDIA
+            candidate["source_lines"] = []
+            report.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+
+            session = load_review_session(report)
+
+        self.assertEqual(session.candidates[0].transcripts, ())
+        self.assertEqual(session.candidates[0].candidate_origin, EXACT_BANK_UNROUTED_MEDIA)
+        self.assertEqual(session.candidates[0].source_event_ids, (1234,))
+
+    def test_v1_report_without_origin_or_event_fields_remains_readable(self):
+        with TemporaryDirectory() as directory:
+            report, _reference = self.make_report(directory)
+            document = json.loads(report.read_text(encoding="utf-8"))
+            document["schema_version"] = 1
+            candidate = document["candidates"][0]
+            candidate.pop("candidate_origin")
+            candidate.pop("source_event_ids")
+            report.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+
+            session = load_review_session(report)
+
+        self.assertEqual(session.candidates[0].candidate_origin, STORY_LINE_ROUTE)
+        self.assertEqual(session.candidates[0].source_event_ids, ())
 
     def test_loads_checksum_bound_candidate_and_recommendation(self):
         with TemporaryDirectory() as directory:

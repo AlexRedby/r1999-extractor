@@ -230,6 +230,91 @@ class StoryVoiceCandidateTest(unittest.TestCase):
         self.assertEqual(reference_digest, report["candidates"][0]["reference_sha256"])
         self.assertFalse(manifest_exists)
 
+    def test_include_all_bank_media_adds_unrouted_candidates_without_transcripts(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = write_story(
+                root / "story.jsonl",
+                [story_line(1, "Routed exact line.", portrait="adult.png")],
+            )
+            audio_root = root / "audio"
+            audio_root.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio_root)
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"routed media", 20: b"unrouted media"},
+                routes={
+                    wwise_event_id("play_hero_line"): (10,),
+                    2020: (20,),
+                },
+            )
+
+            def decode(data, output, media_id, _decoder, *, bank=None):
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"normalized " + data)
+                return ImportedReference(
+                    output,
+                    media_id,
+                    hashlib.sha256(data).hexdigest(),
+                    hashlib.sha256(output.read_bytes()).hexdigest(),
+                    bank,
+                )
+
+            _report_path, report = build_story_voice_candidates(
+                story,
+                bank_index,
+                ["Hero"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, _filename: snapshot,
+                media_decoder=decode,
+                analyzer=clean_metrics,
+                include_all_bank_media=True,
+            )
+
+        by_media = {candidate["media_id"]: candidate for candidate in report["candidates"]}
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(set(by_media), {10, 20})
+        self.assertEqual(by_media[10]["candidate_origin"], "story_line_route")
+        self.assertEqual(len(by_media[10]["source_lines"]), 1)
+        self.assertEqual(by_media[20]["candidate_origin"], "exact_bank_unrouted_media")
+        self.assertEqual(by_media[20]["source_event_ids"], [2020])
+        self.assertEqual(by_media[20]["source_lines"], [])
+
+    def test_include_all_bank_media_rejects_ambiguous_portrait_identity(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = write_story(
+                root / "story.jsonl",
+                [
+                    story_line(1, "Adult.", portrait="adult.png"),
+                    story_line(2, "Young.", portrait="young.png"),
+                ],
+            )
+            audio_root = root / "audio"
+            audio_root.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio_root)
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"routed media"},
+                routes={wwise_event_id("play_hero_line"): (10,)},
+            )
+
+            with self.assertRaisesRegex(
+                StoryVoiceCandidateError, "one exact role/portrait identity"
+            ):
+                build_story_voice_candidates(
+                    story,
+                    bank_index,
+                    ["Hero"],
+                    root / "candidates",
+                    decoder="true",
+                    bank_loader=lambda _index, _filename: snapshot,
+                    include_all_bank_media=True,
+                )
+
     def test_refuses_to_replace_an_existing_candidate_directory(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

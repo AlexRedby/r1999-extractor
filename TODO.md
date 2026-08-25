@@ -11,11 +11,17 @@ in project documentation.
       and Hotelier. Aderyn's Father, Dobharchú and Poacher have been imported
       from exact user-selected media into the VNTTS voice manifest. Preserve
       Aderyn's `hero3146` and `npcnoname326` portrait variants; two crying-only
-      candidates are rejected. Mrs. Owen remains uncertain because the selected
-      speech was not intelligible to the reviewer, and Hotelier has no
-      minimum-duration pass. Do not merge `Poacher I`, `Poacher II` or Glyndŵr
-      or treat configured-unavailable audio as installed. Exact hashes and
-      blockers are in `docs/source-voice-coverage.md`.
+      candidates are rejected. Add a fail-closed `--include-all-bank-media`
+      audit mode only for a requested role whose exact source bank maps to one
+      role/portrait identity; record unrouted media origin and Wwise event IDs,
+      and keep every added candidate manual-review-only. Use it to publish the
+      user-accepted Mrs. Owen media `562400954` without inventing a story-row
+      transcript, and to inventory Hotelier's complete five-clip bank. Hotelier
+      is an expected one-off Character Story gap: do not search other versions,
+      public recordings, reused portraits or generic NPC banks. Do not merge
+      `Poacher I`, `Poacher II` or Glyndŵr or treat configured-unavailable audio
+      as installed. Exact hashes and blockers are in
+      `docs/source-voice-coverage.md`.
 
 - [ ] Add or explicitly assign references for the remaining 51 patch 3.7 lines
       whose 15 speakers are not covered by the current voice manifest. Do not

@@ -233,6 +233,10 @@ pass the objective gates and two expose reused-media transcript conflicts.
 The result is deliberately not manifest-ready without listening. Aderyn spans
 12 portrait/bank groups, only six of which contain an objectively passing
 candidate. Hotelier has five exact clips but none reaches the minimum duration.
+This is the expected boundary for a one-off role in a mostly unvoiced Character
+Story. Do not search other game versions, public recordings, reused portraits
+or generic NPC banks; a five-clip same-bank composite is a VNTTS quality
+experiment, not new extractor identity evidence.
 One quoted Mrs. Owen record uses portrait `637913.png` and routes through
 `activityvoc_story_npcnoname323_beiai.bnk`, so it must not be merged with the
 ordinary `637901.png` / `npcnoname322` group without content review. The

@@ -44,6 +44,8 @@ class StoryVoiceEvidenceTest(unittest.TestCase):
                     "portrait": "314601.png",
                     "source_bank": "aderyn.bnk",
                     "media_id": media_id,
+                    "candidate_origin": "story_line_route",
+                    "source_event_ids": [1000 + media_id],
                     "reference": f"references/{media_id}.wav",
                     "reference_sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
                     "technical_pass": True,

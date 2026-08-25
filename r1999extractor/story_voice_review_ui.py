@@ -415,8 +415,10 @@ class StoryVoiceReviewDialog(QDialog):
         self.details.setText(
             f"Character: {candidate.character} | Portrait: {candidate.portrait or '-'} | "
             f"Bank: {candidate.source_bank} | Media: {candidate.media_id} | "
+            f"Origin: {candidate.candidate_origin} | "
+            f"Events: {', '.join(map(str, candidate.source_event_ids)) or '-'} | "
             f"Source evidence lines: {len(candidate.transcripts)} ({lines})\n"
-            f"Transcript: {' | '.join(candidate.transcripts)}\n"
+            f"Transcript: {' | '.join(candidate.transcripts) or 'unrouted media; listen manually'}\n"
             f"Context: {' | '.join(context_parts) or 'not recorded in this report'}\n"
             f"Potential coverage: {coverage}\n"
             f"Automatic advisory evidence: {automatic}\n"

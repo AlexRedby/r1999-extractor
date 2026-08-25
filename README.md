@@ -199,6 +199,12 @@ uv run r1999-story-voice-candidates \
   --role Aderyn --role Dobharchú --role "Mrs. Owen" \
   --role Hotelier --role Poacher --role "Aderyn's Father" \
   --output /path/to/character-story-reference-candidates
+
+# Include every event-routed medium from an exact role bank even when no story
+# row names it. The bank must map to one requested role/portrait identity.
+uv run r1999-story-voice-candidates \
+  --role "Mrs. Owen" --include-all-bank-media \
+  --output /path/to/mrs-owen-complete-bank-candidates
 ```
 
 The command snapshots and revalidates the story index, bank index and exact
@@ -206,7 +212,9 @@ bank bytes; verifies every Wwise event-to-media route; decodes only those media
 payloads; and records source/reference SHA-256 plus technical metrics. Output is
 an audition set, not a voice manifest: every candidate remains marked for
 manual speaker, music/SFX and multiple-speaker review. Existing output is never
-replaced.
+replaced. Report v2 marks every candidate as `story_line_route` or
+`exact_bank_unrouted_media` and records exact Wwise event IDs. Unrouted media
+has no invented transcript; it remains manual-review-only.
 
 The semi-automatic review contract, including transcript alignment,
 non-speech/contamination evidence, portrait-aware clustering and checksum-bound

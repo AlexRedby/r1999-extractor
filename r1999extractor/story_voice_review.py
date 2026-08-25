@@ -13,7 +13,12 @@ from pathlib import Path, PurePosixPath
 from vntts_artifacts.atomic_io import atomic_write_json
 from vntts_artifacts.file_integrity import sha256_file
 
-from r1999extractor.story_voice_candidates import REPORT_SCHEMA, REPORT_VERSION
+from r1999extractor.story_voice_candidates import (
+    EXACT_BANK_UNROUTED_MEDIA,
+    REPORT_SCHEMA,
+    STORY_LINE_ROUTE,
+    SUPPORTED_REPORT_VERSIONS,
+)
 
 REVIEW_SCHEMA = "r1999.story-voice-reference-review"
 REVIEW_VERSION = 2
@@ -32,6 +37,8 @@ class ReviewCandidate:
     portrait: str | None
     source_bank: str
     media_id: int
+    candidate_origin: str
+    source_event_ids: tuple[int, ...]
     reference: Path
     reference_relative: str
     reference_sha256: str
@@ -151,6 +158,17 @@ def _load_candidates(report_path, report):
         media_id = value.get("media_id")
         if isinstance(media_id, bool) or not isinstance(media_id, int) or media_id < 0:
             raise StoryVoiceReviewError(f"Candidate {index} media ID is invalid")
+        candidate_origin = value.get("candidate_origin", STORY_LINE_ROUTE)
+        if candidate_origin not in {STORY_LINE_ROUTE, EXACT_BANK_UNROUTED_MEDIA}:
+            raise StoryVoiceReviewError(f"Candidate {index} origin is invalid")
+        source_event_ids = value.get("source_event_ids", [])
+        if not isinstance(source_event_ids, list) or any(
+            isinstance(event_id, bool) or not isinstance(event_id, int) or event_id < 0
+            for event_id in source_event_ids
+        ):
+            raise StoryVoiceReviewError(f"Candidate {index} event IDs are invalid")
+        if report.get("schema_version") >= 2 and not source_event_ids:
+            raise StoryVoiceReviewError(f"Candidate {index} has no exact event IDs")
         reference_relative = _required_text(value.get("reference"), f"candidate {index} reference")
         relative = PurePosixPath(reference_relative)
         if relative.is_absolute() or ".." in relative.parts or "\\" in reference_relative:
@@ -170,8 +188,14 @@ def _load_candidates(report_path, report):
         if sha256_file(reference) != reference_sha256:
             raise StoryVoiceReviewError(f"Candidate {index} reference checksum changed")
         source_lines = value.get("source_lines")
-        if not isinstance(source_lines, list) or not source_lines:
+        if not isinstance(source_lines, list):
             raise StoryVoiceReviewError(f"Candidate {index} source lines are missing")
+        if candidate_origin == STORY_LINE_ROUTE and not source_lines:
+            raise StoryVoiceReviewError(f"Candidate {index} source lines are missing")
+        if candidate_origin == EXACT_BANK_UNROUTED_MEDIA and source_lines:
+            raise StoryVoiceReviewError(
+                f"Candidate {index} unrouted media must not invent source lines"
+            )
         transcripts = tuple(
             _required_text(line.get("text"), f"candidate {index} transcript")
             for line in source_lines
@@ -230,6 +254,8 @@ def _load_candidates(report_path, report):
                 portrait=portrait,
                 source_bank=bank,
                 media_id=media_id,
+                candidate_origin=candidate_origin,
+                source_event_ids=tuple(source_event_ids),
                 reference=reference,
                 reference_relative=reference_relative,
                 reference_sha256=reference_sha256,
@@ -255,7 +281,10 @@ def _load_candidates(report_path, report):
 
 def load_review_session(report_path, review_path=None):
     report_path, report_payload, report = _read_json_snapshot(report_path, "candidate report")
-    if report.get("schema") != REPORT_SCHEMA or report.get("schema_version") != REPORT_VERSION:
+    if (
+        report.get("schema") != REPORT_SCHEMA
+        or report.get("schema_version") not in SUPPORTED_REPORT_VERSIONS
+    ):
         raise StoryVoiceReviewError("Unsupported candidate report schema")
     candidates = _load_candidates(report_path, report)
     report_sha256 = hashlib.sha256(report_payload).hexdigest()
