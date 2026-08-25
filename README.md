@@ -214,7 +214,10 @@ an audition set, not a voice manifest: every candidate remains marked for
 manual speaker, music/SFX and multiple-speaker review. Existing output is never
 replaced. Report v2 marks every candidate as `story_line_route` or
 `exact_bank_unrouted_media` and records exact Wwise event IDs. Unrouted media
-has no invented transcript; it remains manual-review-only.
+has no invented transcript; it remains manual-review-only. The report records
+`bank_inventory_scope=complete_exact_bank` only when explicit complete-bank
+mode succeeds, so a downstream composite cannot infer completeness from an
+ordinary story-routed report.
 
 The semi-automatic review contract, including transcript alignment,
 non-speech/contamination evidence, portrait-aware clustering and checksum-bound

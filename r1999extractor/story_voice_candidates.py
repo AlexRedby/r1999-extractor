@@ -464,6 +464,9 @@ def build_story_voice_candidates(
             "source_line_count": len(lines),
             "group_count": len(groups),
             "candidate_count": len(candidates),
+            "bank_inventory_scope": (
+                "complete_exact_bank" if include_all_bank_media else "story_routed_only"
+            ),
             "groups": groups,
             "candidates": candidates,
             "publication_policy": (

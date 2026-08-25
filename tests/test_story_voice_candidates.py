@@ -217,6 +217,7 @@ class StoryVoiceCandidateTest(unittest.TestCase):
             manifest_exists = (report_path.parent / "manifest.json").exists()
 
         self.assertEqual(report["source_line_count"], 3)
+        self.assertEqual(report["bank_inventory_scope"], "story_routed_only")
         self.assertEqual(report["group_count"], 2)
         self.assertEqual(report["candidate_count"], 2)
         self.assertTrue(report["candidates"][0]["transcript_conflict"])
@@ -275,6 +276,7 @@ class StoryVoiceCandidateTest(unittest.TestCase):
 
         by_media = {candidate["media_id"]: candidate for candidate in report["candidates"]}
         self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["bank_inventory_scope"], "complete_exact_bank")
         self.assertEqual(set(by_media), {10, 20})
         self.assertEqual(by_media[10]["candidate_origin"], "story_line_route")
         self.assertEqual(len(by_media[10]["source_lines"]), 1)
