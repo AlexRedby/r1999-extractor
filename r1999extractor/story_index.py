@@ -62,6 +62,24 @@ class Reverse1999StoryError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class StoryAudioCue:
+    cue_index: int
+    source_audio_id: str
+    parameter_code_1: int
+    localized_parameter_2: float
+    parameter_code_3: int
+    scalar_parameter_4: float
+    localized_parameter_5: float
+    parameter_code_6: int
+    audio_status: str = "unchecked"
+    audio_reason: str = "not_resolved"
+    source_event: str | None = None
+    source_bank: str | None = None
+    source_media_ids: tuple[int, ...] = ()
+    available_media_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class StoryLine:
     record_type: str
     line_id: str
@@ -87,6 +105,7 @@ class StoryLine:
     source_bank: str | None = None
     source_media_ids: tuple[int, ...] = ()
     available_media_ids: tuple[int, ...] = ()
+    story_audio_cues: tuple[StoryAudioCue, ...] = ()
     source_kind: str = "story"
     story_group: str | None = None
     story_title: str | None = None
@@ -123,6 +142,104 @@ def classify_speakable_english(text, chapter):
     return True, None
 
 
+def _numeric_story_cue_value(value, *, source, sequence, cue_index, field):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise Reverse1999StoryError(
+            f"Story asset {source} step {sequence} audio cue {cue_index} has an invalid {field}"
+        )
+    return float(value)
+
+
+def _localized_story_cue_value(
+    value,
+    language_index,
+    *,
+    source,
+    sequence,
+    cue_index,
+    field,
+):
+    if not isinstance(value, list) or len(value) <= language_index:
+        raise Reverse1999StoryError(
+            f"Story asset {source} step {sequence} audio cue {cue_index} has an invalid {field}"
+        )
+    return _numeric_story_cue_value(
+        value[language_index],
+        source=source,
+        sequence=sequence,
+        cue_index=cue_index,
+        field=field,
+    )
+
+
+def _parse_story_audio_cues(step, *, source, sequence, language_index):
+    if len(step) <= 5 or step[5] in (None, []):
+        return ()
+    raw_cues = step[5]
+    if not isinstance(raw_cues, list):
+        raise Reverse1999StoryError(f"Story asset {source} step {sequence} has invalid audio cues")
+    cues = []
+    for cue_index, raw_cue in enumerate(raw_cues, start=1):
+        if not isinstance(raw_cue, list) or len(raw_cue) != 7:
+            raise Reverse1999StoryError(
+                f"Story asset {source} step {sequence} audio cue {cue_index} "
+                "has an unsupported structure"
+            )
+        audio_id, code_1, localized_2, code_3, scalar_4, localized_5, code_6 = raw_cue
+        integer_fields = {
+            "audio ID": audio_id,
+            "parameter code 1": code_1,
+            "parameter code 3": code_3,
+            "parameter code 6": code_6,
+        }
+        if any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for value in integer_fields.values()
+        ):
+            invalid = next(
+                name
+                for name, value in integer_fields.items()
+                if not isinstance(value, int) or isinstance(value, bool)
+            )
+            raise Reverse1999StoryError(
+                f"Story asset {source} step {sequence} audio cue {cue_index} "
+                f"has an invalid {invalid}"
+            )
+        cues.append(
+            StoryAudioCue(
+                cue_index=cue_index,
+                source_audio_id=str(audio_id),
+                parameter_code_1=code_1,
+                localized_parameter_2=_localized_story_cue_value(
+                    localized_2,
+                    language_index,
+                    source=source,
+                    sequence=sequence,
+                    cue_index=cue_index,
+                    field="localized parameter 2",
+                ),
+                parameter_code_3=code_3,
+                scalar_parameter_4=_numeric_story_cue_value(
+                    scalar_4,
+                    source=source,
+                    sequence=sequence,
+                    cue_index=cue_index,
+                    field="scalar parameter 4",
+                ),
+                localized_parameter_5=_localized_story_cue_value(
+                    localized_5,
+                    language_index,
+                    source=source,
+                    sequence=sequence,
+                    cue_index=cue_index,
+                    field="localized parameter 5",
+                ),
+                parameter_code_6=code_6,
+            )
+        )
+    return tuple(cues)
+
+
 def parse_story_document(document, source, *, language_index=2, include_non_speakable=False):
     if not isinstance(document, list) or len(document) < 3 or not isinstance(document[2], list):
         raise Reverse1999StoryError(f"Story asset {source} has an unsupported structure")
@@ -155,6 +272,12 @@ def parse_story_document(document, source, *, language_index=2, include_non_spea
                 display_seconds = float(value)
         line_id = f"reverse1999:{chapter}:{sequence}"
         line_text_sha256 = text_sha256(text)
+        story_audio_cues = _parse_story_audio_cues(
+            step,
+            source=source,
+            sequence=sequence,
+            language_index=language_index,
+        )
         lines.append(
             StoryLine(
                 record_type="line",
@@ -171,6 +294,7 @@ def parse_story_document(document, source, *, language_index=2, include_non_spea
                 kind="narration" if speaker == "Narrator" else "dialogue",
                 voice_character=voice_character_for_speaker(speaker),
                 text_sha256=line_text_sha256,
+                story_audio_cues=story_audio_cues,
                 speakable=speakable,
                 filter_reason=filter_reason,
             )
@@ -604,6 +728,21 @@ def resolve_story_audio(lines, resolver):
     resolved = []
     for line in lines:
         resolution = resolver.resolve(line.source_voice_spec)
+        story_audio_cues = []
+        for cue in line.story_audio_cues:
+            cue_resolution = resolver.resolve(cue.source_audio_id)
+            story_audio_cues.append(
+                replace(
+                    cue,
+                    source_audio_id=cue_resolution.audio_id or cue.source_audio_id,
+                    audio_status=cue_resolution.status,
+                    audio_reason=cue_resolution.reason,
+                    source_event=cue_resolution.event,
+                    source_bank=cue_resolution.bank,
+                    source_media_ids=cue_resolution.media_ids,
+                    available_media_ids=cue_resolution.available_media_ids,
+                )
+            )
         resolved.append(
             replace(
                 line,
@@ -614,6 +753,7 @@ def resolve_story_audio(lines, resolver):
                 source_bank=resolution.bank,
                 source_media_ids=resolution.media_ids,
                 available_media_ids=resolution.available_media_ids,
+                story_audio_cues=tuple(story_audio_cues),
             )
         )
     return resolved
@@ -682,6 +822,12 @@ def write_story_index(lines, output=default_output, *, bundle=None):
         "line_count": len(lines),
         "speakable_count": sum(line.speakable for line in lines),
         "audio_status_counts": dict(sorted(Counter(line.audio_status for line in lines).items())),
+        "story_audio_cue_count": sum(len(line.story_audio_cues) for line in lines),
+        "story_audio_cue_status_counts": dict(
+            sorted(
+                Counter(cue.audio_status for line in lines for cue in line.story_audio_cues).items()
+            )
+        ),
         "source_kind_counts": dict(sorted(Counter(line.source_kind for line in lines).items())),
         "story_group_counts": dict(
             sorted(Counter(line.story_group for line in lines if line.story_group).items())
@@ -697,6 +843,14 @@ def write_story_index(lines, output=default_output, *, bundle=None):
             "unknown",
         )
         record["source_audio_id"] = line.source_voice_id
+        record["story_audio_cues"] = []
+        for cue in line.story_audio_cues:
+            cue_record = asdict(cue)
+            cue_record["source_audio_status"] = source_audio_status_by_extractor_status.get(
+                cue.audio_status,
+                "unknown",
+            )
+            record["story_audio_cues"].append(cue_record)
         records.append(record)
     return write_story_index_document(output, metadata, records)
 

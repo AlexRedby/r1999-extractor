@@ -29,6 +29,11 @@ artifacts:
 - `game-pack.json`: `vntts.game-pack` schema version 1, with portable SHA-256
   bindings for the story index, voice manifest, and every reference WAV.
 
+Story-index line records preserve ordered story-step sound declarations in the
+additive `story_audio_cues` field, separately from source voice audio. See
+[`docs/story-audio-cues.md`](docs/story-audio-cues.md) for the positional schema,
+Wwise provenance, and the current inline-marker census.
+
 The JSONL file starts with one metadata record followed by line records. Each
 line has a stable ID, chapter, sequence, speaker, text, and source information.
 The metadata record also contains a `collections` catalog for player-visible

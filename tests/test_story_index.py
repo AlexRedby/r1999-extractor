@@ -8,6 +8,7 @@ from unittest.mock import patch
 from vntts_artifacts.story_index import load_story_index
 
 from r1999extractor.reverse1999_index import index_version
+from r1999extractor.story_audio import AudioResolution
 from r1999extractor.story_index import (
     Reverse1999StoryError,
     add_story_context,
@@ -19,6 +20,7 @@ from r1999extractor.story_index import (
     classify_speakable_english,
     extract_hero_story_plot_lines,
     parse_story_document,
+    resolve_story_audio,
     write_story_index,
 )
 
@@ -31,6 +33,25 @@ def payload(speaker, text, *, voice="", portrait=""):
     values[14] = voice
     values[15] = ["", "", text]
     return values
+
+
+def story_audio_cue(
+    audio_id,
+    *,
+    parameter_code_1=0,
+    parameter_code_3=1,
+    scalar=1.0,
+    parameter_code_6=0,
+):
+    return [
+        audio_id,
+        parameter_code_1,
+        [0.1, 0.2, 0.3],
+        parameter_code_3,
+        scalar,
+        [1.1, 1.2, 1.3],
+        parameter_code_6,
+    ]
 
 
 class StoryIndexTest(unittest.TestCase):
@@ -100,6 +121,114 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(lines[1].speaker, "Narrator")
         self.assertEqual(lines[1].kind, "narration")
 
+    def test_preserves_ordered_story_audio_cues_separately_from_voice(self):
+        document = [
+            "title",
+            "",
+            [
+                [
+                    7,
+                    "step",
+                    payload("Brimley", "Bang!", voice="play_voice"),
+                    None,
+                    None,
+                    [
+                        story_audio_cue(501787, parameter_code_3=1),
+                        story_audio_cue(501787, parameter_code_3=2),
+                    ],
+                ]
+            ],
+        ]
+        document[2][0][2][11][1] = "Brimley"
+        document[2][0][2][15][1] = "Bang!"
+
+        line = parse_story_document(document, "json_story_step_24006")[0]
+
+        self.assertEqual(line.source_voice_spec, "play_voice")
+        self.assertEqual([cue.cue_index for cue in line.story_audio_cues], [1, 2])
+        self.assertEqual(
+            [cue.source_audio_id for cue in line.story_audio_cues],
+            ["501787", "501787"],
+        )
+        self.assertEqual(
+            [cue.parameter_code_3 for cue in line.story_audio_cues],
+            [1, 2],
+        )
+        self.assertEqual(line.story_audio_cues[0].localized_parameter_2, 0.3)
+        self.assertEqual(line.story_audio_cues[0].localized_parameter_5, 1.3)
+
+        other_language = parse_story_document(
+            document,
+            "json_story_step_24006",
+            language_index=1,
+        )[0]
+        self.assertEqual(
+            [cue.source_audio_id for cue in other_language.story_audio_cues],
+            ["501787", "501787"],
+        )
+        self.assertEqual(other_language.story_audio_cues[0].localized_parameter_2, 0.2)
+
+    def test_rejects_malformed_nonempty_story_audio_cue(self):
+        document = [
+            "title",
+            "",
+            [[7, "step", payload("Brimley", "Bang!"), None, None, [[501787, 0]]]],
+        ]
+
+        with self.assertRaisesRegex(
+            Reverse1999StoryError,
+            "audio cue 1 has an unsupported structure",
+        ):
+            parse_story_document(document, "json_story_step_24006")
+
+    def test_resolves_voice_and_story_audio_cues_independently(self):
+        document = [
+            "title",
+            "",
+            [
+                [
+                    7,
+                    "step",
+                    payload("Brimley", "Bang!", voice="700"),
+                    None,
+                    None,
+                    [story_audio_cue(501787)],
+                ]
+            ],
+        ]
+        line = parse_story_document(document, "json_story_step_24006")[0]
+
+        class Resolver:
+            @staticmethod
+            def resolve(audio_id):
+                if audio_id == "700":
+                    return AudioResolution(
+                        "installed",
+                        "resolved_local_media",
+                        audio_id="700",
+                        event="play_voice",
+                        bank="voice.bnk",
+                        media_ids=(70,),
+                        available_media_ids=(70,),
+                    )
+                if audio_id == "501787":
+                    return AudioResolution(
+                        "configured_unavailable",
+                        "bank_not_installed",
+                        audio_id="501787",
+                        event="play_door",
+                        bank="story_sfx.bnk",
+                    )
+                raise AssertionError(audio_id)
+
+        resolved = resolve_story_audio([line], Resolver())[0]
+
+        self.assertEqual(resolved.audio_status, "installed")
+        self.assertEqual(resolved.source_event, "play_voice")
+        self.assertEqual(resolved.story_audio_cues[0].audio_status, "configured_unavailable")
+        self.assertEqual(resolved.story_audio_cues[0].source_event, "play_door")
+        self.assertEqual(resolved.story_audio_cues[0].source_bank, "story_sfx.bnk")
+
     def test_writes_versioned_jsonl_contract(self):
         lines = parse_story_document(
             ["title", "", [[1, "step", payload("A", "Text")]]],
@@ -122,6 +251,49 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(records[1]["source_audio_status"], "available")
         self.assertEqual(records[1]["source_audio_id"], "7")
         self.assertNotIn("collections", records[0])
+
+    def test_writes_normalized_story_audio_cue_provenance(self):
+        line = parse_story_document(
+            [
+                "title",
+                "",
+                [
+                    [
+                        1,
+                        "step",
+                        payload("A", "Bang!"),
+                        None,
+                        None,
+                        [story_audio_cue(501787)],
+                    ]
+                ],
+            ],
+            "json_story_step_1001",
+        )[0]
+        cue = replace(
+            line.story_audio_cues[0],
+            audio_status="configured_unavailable",
+            audio_reason="bank_not_installed",
+            source_event="play_door",
+            source_bank="story_sfx.bnk",
+        )
+        line = replace(line, story_audio_cues=(cue,))
+
+        with TemporaryDirectory() as temporary_directory:
+            output = write_story_index([line], Path(temporary_directory) / "story.jsonl")
+            rows = output.read_text(encoding="utf-8").splitlines()
+            metadata = json.loads(rows[0])
+            record = json.loads(rows[1])
+
+        self.assertEqual(record["story_audio_cues"][0]["source_audio_id"], "501787")
+        self.assertEqual(record["story_audio_cues"][0]["source_audio_status"], "unavailable")
+        self.assertEqual(record["story_audio_cues"][0]["source_event"], "play_door")
+
+        self.assertEqual(metadata["story_audio_cue_count"], 1)
+        self.assertEqual(
+            metadata["story_audio_cue_status_counts"],
+            {"configured_unavailable": 1},
+        )
 
     def test_writes_game_derived_collection_catalog_and_line_membership(self):
         main = annotate_main_story_episode_lines(
