@@ -260,7 +260,28 @@ the adult Rhiannon voice for them. Mrs. Owen media `599773947` is not approved:
 the voice sounded usable, but its speech was not intelligible enough for a
 cloning reference.
 
-For the remaining Aderyn, Mrs. Owen and Hotelier audition, a read-only scan of
+The later expanded checksum-bound review completed all seven selected cluster
+cards. Six were accepted: both Dobharchú groups, Poacher, Aderyn's Father,
+adult Aderyn/Rhiannon media `792349907`, and the already scoped child
+Aderyn/Rhiannon media `477089679`. This did not merge the rejected crying clips
+or unrelated portrait identities. A complete exact-bank scan then recovered
+the stronger 3.172-second Mrs. Owen medium `562400954`; the user accepted its
+speaker identity and the separate generated-quality card. Its decoded WAV
+SHA-256 is
+`82e3125fbc195951006817ccd13d507b40c4d2311c2f17ebc7a37f2505e7e22b`.
+VNTTS published the resulting immutable binding for 34 exact Mrs. Owen queue
+IDs without rewriting the earlier `needs_sample` decision.
+
+Hotelier's complete exact bank contains exactly five short clips totaling
+5.009 seconds, none of which passes the single-reference duration gate. A
+checksum-ledgered same-bank composite was evaluated and did not establish an
+acceptable cloning reference. Because Hotelier is a one-off role in a mostly
+unvoiced Character Story, this is the completed extractor evidence boundary:
+do not search other versions, public recordings, reused portraits, or generic
+NPC banks. VNTTS uses an explicit Hotelier-only Narrator fallback instead of
+inventing character identity evidence.
+
+For the completed Aderyn, Mrs. Owen and Hotelier audition, a read-only scan of
 all 7,018 installed iOS bundles recovered 11 of the 12 exact portrait sprites:
 all nine Aderyn identities (`314601`, `314617`, `314619`, `314622`, `314623`,
 `314625`, `533704`, `533705`, `533706`) and both Mrs. Owen identities (`637901`,
