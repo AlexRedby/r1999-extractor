@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from r1999extractor.reverse1999_index import index_version
+from r1999extractor.wwise import WwiseBankError, extract_embedded_media
 
 audio_config_tables = {
     "json_role_audio",
@@ -106,6 +107,7 @@ class StoryAudioResolver:
         self.audio_root = Path(bank_index["game_audio_directory"]).expanduser().resolve()
         self.external_media_root = self.audio_root.parent / "Media"
         self.banks = {}
+        self._embedded_media = {}
         for entry in bank_index.get("banks", ()):
             filename = entry.get("filename")
             if not isinstance(filename, str) or not filename:
@@ -114,6 +116,93 @@ class StoryAudioResolver:
             if key in self.banks:
                 raise StoryAudioResolutionError(f"Duplicate bank filename: {filename}")
             self.banks[key] = entry
+
+    def read_single_available_media(self, resolution):
+        """Return the one exact installed WEM bound to a resolved event.
+
+        Wwise events may point at random containers or multiple media objects.
+        Those routes are deliberately not collapsed into one guessed duration.
+        """
+        if (
+            resolution.status != "installed"
+            or len(resolution.media_ids) != 1
+            or resolution.available_media_ids != resolution.media_ids
+            or not resolution.bank
+        ):
+            return None
+        media_id = resolution.media_ids[0]
+        bank = self.banks.get(Path(resolution.bank).stem.casefold())
+        if bank is None:
+            raise StoryAudioResolutionError(
+                f"Resolved media {media_id} has no installed bank {resolution.bank!r}"
+            )
+        embedded_ids = set(bank.get("embedded_media_ids", ()))
+        if media_id not in embedded_ids:
+            return media_id, self._read_external_media(media_id)
+        key = str(bank.get("path") or bank.get("filename") or "").strip()
+        if not key:
+            raise StoryAudioResolutionError(
+                f"Installed bank {resolution.bank!r} has no safe source path"
+            )
+        if key not in self._embedded_media:
+            bank_path = self._safe_installed_path(self.audio_root, key)
+            before = bank_path.stat()
+            expected_size = bank.get("size")
+            expected_mtime = bank.get("mtime_ns")
+            if (
+                isinstance(expected_size, int)
+                and expected_size != before.st_size
+                or isinstance(expected_mtime, int)
+                and expected_mtime != before.st_mtime_ns
+            ):
+                raise StoryAudioResolutionError(
+                    f"Installed bank changed after indexing: {bank_path.name}"
+                )
+            payload = bank_path.read_bytes()
+            after = bank_path.stat()
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise StoryAudioResolutionError(
+                    f"Installed bank changed while reading: {bank_path.name}"
+                )
+            try:
+                self._embedded_media[key] = {
+                    item.media_id: item.data for item in extract_embedded_media(payload)
+                }
+            except WwiseBankError as error:
+                raise StoryAudioResolutionError(
+                    f"Unable to read installed bank {bank_path.name}: {error}"
+                ) from error
+        payload = self._embedded_media[key].get(media_id)
+        if payload is None:
+            raise StoryAudioResolutionError(
+                f"Indexed embedded media {media_id} is absent from {resolution.bank}"
+            )
+        return media_id, payload
+
+    def _read_external_media(self, media_id):
+        path = self._safe_installed_path(self.external_media_root, f"{media_id}.wem")
+        before = path.stat()
+        payload = path.read_bytes()
+        after = path.stat()
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise StoryAudioResolutionError(
+                f"Installed external media changed while reading: {path.name}"
+            )
+        return payload
+
+    @staticmethod
+    def _safe_installed_path(root, relative):
+        root = Path(root).resolve()
+        try:
+            path = (root / relative).resolve(strict=True)
+            path.relative_to(root)
+        except (OSError, ValueError) as error:
+            raise StoryAudioResolutionError(
+                f"Installed audio path is missing or unsafe: {relative}"
+            ) from error
+        if not path.is_file():
+            raise StoryAudioResolutionError(f"Installed audio is not a file: {relative}")
+        return path
 
     @classmethod
     def from_file(cls, registry, path):

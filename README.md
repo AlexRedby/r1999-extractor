@@ -150,6 +150,11 @@ rebuilding:
 r1999-bank-index --check
 ```
 
+To add checksum-bound completion timing for selected installed source voices,
+publish a new story index with `r1999-source-audio-duration`. The command keeps
+ambiguous media untimed and does not mistake a short character cue for a full
+reading; see [`docs/source-audio-timing.md`](docs/source-audio-timing.md).
+
 Every output line has one explicit audio status:
 
 - `installed`: the configured event resolves to local media;

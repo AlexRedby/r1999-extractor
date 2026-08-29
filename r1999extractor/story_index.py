@@ -28,6 +28,10 @@ from r1999extractor.reverse1999_index import (
 )
 from r1999extractor.reverse1999_voice_import import find_game_audio_directory
 from r1999extractor.settings import get_local_data_directory
+from r1999extractor.source_audio_duration import (
+    SourceAudioDurationProbe,
+    classify_source_audio_completeness,
+)
 from r1999extractor.story_audio import (
     StoryAudioResolutionError,
     StoryAudioResolver,
@@ -105,6 +109,14 @@ class StoryLine:
     source_bank: str | None = None
     source_media_ids: tuple[int, ...] = ()
     available_media_ids: tuple[int, ...] = ()
+    source_audio_duration_seconds: float | None = None
+    source_audio_duration_media_id: int | None = None
+    source_audio_duration_media_sha256: str | None = None
+    source_audio_duration_sample_rate: int | None = None
+    source_audio_duration_sample_count: int | None = None
+    source_audio_duration_decoder: str | None = None
+    source_audio_completeness: str = "unknown"
+    source_audio_completeness_reason: str | None = None
     story_audio_cues: tuple[StoryAudioCue, ...] = ()
     source_kind: str = "story"
     story_group: str | None = None
@@ -724,10 +736,22 @@ def add_story_context(lines):
     ]
 
 
-def resolve_story_audio(lines, resolver):
+def resolve_story_audio(lines, resolver, *, duration_probe=None, duration_chapters=()):
+    duration_chapters = {str(chapter).strip() for chapter in duration_chapters}
     resolved = []
     for line in lines:
         resolution = resolver.resolve(line.source_voice_spec)
+        timing = (
+            duration_probe.probe(resolution)
+            if duration_probe is not None
+            and (not duration_chapters or line.chapter in duration_chapters)
+            else None
+        )
+        completeness, completeness_reason = (
+            classify_source_audio_completeness(line.text, timing)
+            if timing is not None
+            else ("unknown", None)
+        )
         story_audio_cues = []
         for cue in line.story_audio_cues:
             cue_resolution = resolver.resolve(cue.source_audio_id)
@@ -753,6 +777,24 @@ def resolve_story_audio(lines, resolver):
                 source_bank=resolution.bank,
                 source_media_ids=resolution.media_ids,
                 available_media_ids=resolution.available_media_ids,
+                source_audio_duration_seconds=(
+                    timing.duration_seconds if timing is not None else None
+                ),
+                source_audio_duration_media_id=(timing.media_id if timing is not None else None),
+                source_audio_duration_media_sha256=(
+                    timing.media_sha256 if timing is not None else None
+                ),
+                source_audio_duration_sample_rate=(
+                    timing.sample_rate if timing is not None else None
+                ),
+                source_audio_duration_sample_count=(
+                    timing.sample_count if timing is not None else None
+                ),
+                source_audio_duration_decoder=(
+                    timing.decoder_version if timing is not None else None
+                ),
+                source_audio_completeness=completeness,
+                source_audio_completeness_reason=completeness_reason,
                 story_audio_cues=tuple(story_audio_cues),
             )
         )
@@ -833,6 +875,8 @@ def write_story_index(lines, output=default_output, *, bundle=None):
             sorted(Counter(line.story_group for line in lines if line.story_group).items())
         ),
     }
+    if any(line.source_audio_duration_seconds is not None for line in lines):
+        metadata["source_audio_completion"] = "verified-media-duration-seconds"
     if collections:
         metadata["collections"] = collections
     records = []
@@ -921,6 +965,21 @@ def create_parser():
         action="store_true",
         help="Exclude config-only hero stories and anecdote classification.",
     )
+    parser.add_argument(
+        "--measure-source-audio-durations",
+        action="store_true",
+        help=(
+            "Measure exact single-media source voices with vgmstream and bind "
+            "their checksums to the story index."
+        ),
+    )
+    parser.add_argument(
+        "--source-audio-duration-chapter",
+        action="append",
+        default=[],
+        help="Only measure source voices in this chapter; repeat to select several chapters.",
+    )
+    parser.add_argument("--decoder", default="vgmstream-cli")
     return parser
 
 
@@ -968,7 +1027,17 @@ def main(arguments=None):
                     else None
                 ),
             )
-            lines = resolve_story_audio(lines, resolver)
+            duration_probe = (
+                SourceAudioDurationProbe(resolver, decoder=options.decoder)
+                if options.measure_source_audio_durations
+                else None
+            )
+            lines = resolve_story_audio(
+                lines,
+                resolver,
+                duration_probe=duration_probe,
+                duration_chapters=options.source_audio_duration_chapter,
+            )
         output = write_story_index(lines, options.output, bundle=bundle)
     except (
         OSError,

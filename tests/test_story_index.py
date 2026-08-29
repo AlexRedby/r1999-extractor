@@ -8,6 +8,7 @@ from unittest.mock import patch
 from vntts_artifacts.story_index import load_story_index
 
 from r1999extractor.reverse1999_index import index_version
+from r1999extractor.source_audio_duration import SourceAudioTiming
 from r1999extractor.story_audio import AudioResolution
 from r1999extractor.story_index import (
     Reverse1999StoryError,
@@ -228,6 +229,52 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(resolved.story_audio_cues[0].audio_status, "configured_unavailable")
         self.assertEqual(resolved.story_audio_cues[0].source_event, "play_door")
         self.assertEqual(resolved.story_audio_cues[0].source_bank, "story_sfx.bnk")
+
+    def test_binds_exact_source_audio_timing_to_selected_chapter(self):
+        line = parse_story_document(
+            ["title", "", [[7, "step", payload("Brimley", "Hello.", voice="700")]]],
+            "json_story_step_24006",
+        )[0]
+
+        class Resolver:
+            @staticmethod
+            def resolve(_audio_id):
+                return AudioResolution(
+                    "installed",
+                    "resolved_local_media",
+                    audio_id="700",
+                    event="play_voice",
+                    bank="voice.bnk",
+                    media_ids=(70,),
+                    available_media_ids=(70,),
+                )
+
+        class Probe:
+            @staticmethod
+            def probe(_resolution):
+                return SourceAudioTiming(1.25, 70, "a" * 64, 24000, 30000, "r-test")
+
+        timed = resolve_story_audio(
+            [line],
+            Resolver(),
+            duration_probe=Probe(),
+            duration_chapters=("24006",),
+        )[0]
+
+        self.assertEqual(timed.source_audio_duration_seconds, 1.25)
+        self.assertEqual(timed.source_audio_duration_media_id, 70)
+        self.assertEqual(timed.source_audio_duration_media_sha256, "a" * 64)
+        self.assertEqual(timed.source_audio_duration_sample_rate, 24000)
+        self.assertEqual(timed.source_audio_duration_sample_count, 30000)
+        self.assertEqual(timed.source_audio_duration_decoder, "r-test")
+
+        with TemporaryDirectory() as temporary_directory:
+            output = write_story_index([timed], Path(temporary_directory) / "story.jsonl")
+            metadata = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(
+            metadata["source_audio_completion"],
+            "verified-media-duration-seconds",
+        )
 
     def test_writes_versioned_jsonl_contract(self):
         lines = parse_story_document(
