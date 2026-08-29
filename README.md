@@ -126,6 +126,17 @@ r1999-story-index \
   --output ./output/story-index.jsonl
 ```
 
+Export the raw story control sequence after the story index is stable. This
+preserves silent ellipses and timed no-text transitions instead of inventing
+events for sequence-number gaps. See
+[`docs/live-sequence-plans.md`](docs/live-sequence-plans.md).
+
+```bash
+r1999-live-sequence \
+  --story-index ./output/story-index.jsonl \
+  --output ./output/live-sequence-plan.json
+```
+
 By default, the command keeps English speakable records, strips Unity rich
 text, normalizes known aliases, adds adjacent-line context, classifies legacy
 anecdotes, includes config-only interactive hero stories, and resolves every

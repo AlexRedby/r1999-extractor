@@ -25,6 +25,7 @@ dev = ["ruff==0.16.2"]
 
 [project.scripts]
 r1999-story-index = "r1999extractor.story_index:main"
+r1999-live-sequence = "r1999extractor.live_sequence:main"
 r1999-migrate-vntts-data = "r1999extractor.migration:main"
 r1999-wwise-extract = "r1999extractor.game_audio_cli:extract_main"
 r1999-audio-convert = "r1999extractor.game_audio_cli:convert_main"
