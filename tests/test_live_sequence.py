@@ -2,12 +2,14 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from vntts_artifacts.live_sequence import load_live_sequence_plan
 from vntts_artifacts.story_index import write_story_index
 
 from r1999extractor.live_sequence import (
     Reverse1999LiveSequenceError,
     build_live_sequence_chapter,
     build_live_sequence_document,
+    write_live_sequence_plan,
 )
 
 
@@ -286,6 +288,31 @@ class Reverse1999LiveSequenceTest(unittest.TestCase):
             [chapter["chapter"] for chapter in plan["chapters"]],
             ["314601"],
         )
+
+    def test_writer_delegates_complete_validation_to_shared_contract(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = root / "story-index.jsonl"
+            source = root / "story.dat"
+            output = root / "live-sequence.json"
+            source.write_bytes(b"exact source bundle bytes")
+            write_story_index(
+                story,
+                {"game": "Reverse: 1999", "language": "en"},
+                [story_line(2, "Canonical speech.")],
+            )
+            document = build_live_sequence_document(
+                {"json_story_step_314601": story_document()},
+                story,
+                source,
+                producer_version="test",
+            )
+
+            written = write_live_sequence_plan(document, output, story)
+            plan = load_live_sequence_plan(written, story)
+
+        self.assertEqual(plan.game_id, "reverse1999")
+        self.assertEqual(len(plan.events), 4)
 
 
 if __name__ == "__main__":

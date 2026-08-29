@@ -40,7 +40,7 @@ The metadata record also contains a `collections` catalog for player-visible
 main-story chapters, anecdotes, and character stories. Every collection has a
 stable game-derived ID, localized title, generic kind, and display order.
 
-Compatibility with the released `vntts-artifacts` v0.6.1 APIs is covered by a
+Compatibility with the released `vntts-artifacts` v0.7.0 APIs is covered by a
 synthetic end-to-end fixture. The lossless `StoryIndexDocument` API preserves
 Reverse: 1999 source-audio and collection fields while generic authoring code
 consumes the shared contract without importing this package.
@@ -87,13 +87,15 @@ voice manifest:
 r1999-source-pack \
   --story-index /path/to/story-index.jsonl \
   --voice-manifest /path/to/voice-pack/manifest.json \
+  --live-sequence-plan /path/to/live-sequence-plan.json \
   --game-version 3.7 \
   --output /path/to/reverse1999-3.7-source-pack
 ```
 
 The output directory must not already exist. It contains copied source
-artifacts, copied reference WAVs, and a `game-pack.json` with stable game and
-producer identity plus derived checksums. It deliberately has no
+artifacts, copied reference WAVs, an optional validated sequence plan, and a
+`game-pack.json` with stable game and producer identity plus derived checksums.
+It deliberately has no
 `generated_audio` component. See
 [`docs/source-game-pack.md`](docs/source-game-pack.md).
 

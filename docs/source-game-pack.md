@@ -1,12 +1,13 @@
 # Source game-pack delivery
 
 `r1999-source-pack` exports the extractor-owned boundary through the released
-`vntts-artifacts` v0.6.1 `vntts.game-pack` schema version 1. The delivery is a
+`vntts-artifacts` v0.7.0 `vntts.game-pack` schema version 2. The delivery is a
 new, portable directory with this shape:
 
 ```text
 game-pack.json
 story-index.jsonl
+live-sequence.json  # optional
 voice/
   manifest.json
   references/*.wav
@@ -23,6 +24,13 @@ voice manifest, and every referenced WAV. `load_game_pack` verifies those
 checksums, rejects paths that leave the delivery directory, loads both component
 contracts, and ensures that declared WAVs exactly match manifest references.
 This makes the whole directory relocatable without changing the manifest.
+
+Pass `--live-sequence-plan` to copy the plan as a core component. The exporter
+loads it against the exact source story index before staging, preserves its
+bytes, and the game-pack writer checks both its artifact SHA-256 and nested
+story-index SHA-256. The plan and pack game IDs must both be `reverse1999`.
+Omitting the option remains valid for source deliveries without control-flow
+data.
 
 Producer provenance is represented by:
 
@@ -64,9 +72,9 @@ for collection in story.collections:
 ```
 
 `StoryIndexDocument`, its lossless record/collection types, and canonical
-source-audio queue policy were added in the immutable `vntts-artifacts` v0.6.1
-release. The wire schemas remain version 1, so this is an additive shared API
-upgrade rather than a source-pack format change.
+source-audio queue policy were added in v0.6.1. Immutable v0.7.0 adds live
+sequence schema v1 and game-pack schema v2; its loader keeps schema-v1 pack
+compatibility while its writer publishes v2.
 
 The synthetic compatibility and regression suite additionally moves a completed
 pack and reloads it, checks provenance and component omission, detects a mutated

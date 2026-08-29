@@ -109,7 +109,7 @@ class VnttsArtifactsCompatibilityTest(unittest.TestCase):
         )
         self.assertEqual(voices[0].references, ("source-audio/voice-7.wav",))
         self.assertEqual(delivery_document["schema"], "vntts.game-pack")
-        self.assertEqual(delivery_document["schema_version"], 1)
+        self.assertEqual(delivery_document["schema_version"], 2)
         self.assertNotIn("generated_audio", delivery_document["components"])
         self.assertEqual(moved_pack.game_id, "reverse1999")
         self.assertEqual(moved_pack.game_version, "3.7.0-synthetic")

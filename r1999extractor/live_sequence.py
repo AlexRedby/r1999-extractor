@@ -10,8 +10,15 @@ import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from vntts_artifacts.atomic_io import atomic_write_json
 from vntts_artifacts.file_integrity import sha256_file
+from vntts_artifacts.live_sequence import (
+    LIVE_SEQUENCE_SCHEMA,
+    LIVE_SEQUENCE_SCHEMA_VERSION,
+    LiveSequencePlanError,
+)
+from vntts_artifacts.live_sequence import (
+    write_live_sequence_plan as write_shared_live_sequence_plan,
+)
 from vntts_artifacts.story_index import StoryIndexError, load_story_index
 
 from r1999extractor.story_index import (
@@ -21,8 +28,6 @@ from r1999extractor.story_index import (
     find_story_bundle,
 )
 
-LIVE_SEQUENCE_SCHEMA = "vntts.live-sequence-plan"
-LIVE_SEQUENCE_SCHEMA_VERSION = 1
 _SILENT_TEXT_PATTERN = re.compile(r"[\s.…·⋯]+")
 
 
@@ -246,10 +251,15 @@ def extract_story_documents(bundle, *, chapters=()):
     return documents
 
 
-def write_live_sequence_plan(document, output):
-    output = Path(output).expanduser().resolve()
-    atomic_write_json(output, document)
-    return output
+def write_live_sequence_plan(document, output, story_index_path):
+    try:
+        return write_shared_live_sequence_plan(
+            output,
+            document,
+            story_index_path,
+        ).path
+    except LiveSequencePlanError as error:
+        raise Reverse1999LiveSequenceError(str(error)) from error
 
 
 def create_parser():
@@ -291,7 +301,7 @@ def main(arguments=None):
             raise Reverse1999LiveSequenceError(
                 "Story index changed while the live sequence plan was being built"
             )
-        output = write_live_sequence_plan(plan, options.output)
+        output = write_live_sequence_plan(plan, options.output, options.story_index)
     except (OSError, Reverse1999StoryError, Reverse1999LiveSequenceError) as error:
         print(error, file=sys.stderr)
         return 1

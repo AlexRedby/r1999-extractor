@@ -30,7 +30,9 @@ or key presses for numeric sequence gaps:
 The exporter rejects malformed or duplicate raw steps and any indexed line that
 cannot be rebound to its raw source event. It filters the bundle to chapters
 that actually occur in the selected story index. Source and story file identity
-are checked again immediately before publication.
+are checked again immediately before publication. Final publication delegates
+to the shared `vntts-artifacts` v0.7.0 writer, so extractor output and game-pack
+consumers use one graph validator rather than parallel wire implementations.
 
 Generate a complete plan for every Unity story chapter represented by an index:
 

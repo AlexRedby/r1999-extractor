@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from vntts_artifacts.game_pack import GamePackError, load_game_pack
+from vntts_artifacts.live_sequence import write_live_sequence_plan
 from vntts_artifacts.voice_manifest import write_voice_manifest
 
 from r1999extractor.source_pack import SourceGamePackError, export_source_game_pack, main
@@ -96,6 +97,48 @@ class SourceGamePackTest(unittest.TestCase):
             with self.assertRaisesRegex(GamePackError, "checksum does not match"):
                 load_game_pack(pack.manifest_path)
 
+    def test_exports_optional_live_sequence_as_a_validated_core_component(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story, manifest = create_sources(root)
+            sequence = root / "input" / "live-sequence.json"
+            write_live_sequence_plan(
+                sequence,
+                {
+                    "game_id": "reverse1999",
+                    "producer": {"name": "reverse1999-extractor", "version": "test"},
+                    "source_extract_sha256": "1" * 64,
+                    "chapters": [
+                        {
+                            "chapter": "101301",
+                            "entry_event_ids": ["event-1"],
+                            "events": [
+                                {
+                                    "event_id": "event-1",
+                                    "sequence": 1,
+                                    "kind": "speech",
+                                    "line_id": "reverse1999:101301:1",
+                                    "control": "terminal",
+                                    "successors": [],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                story,
+            )
+
+            pack = export_source_game_pack(
+                root / "pack",
+                story_index=story,
+                voice_manifest=manifest,
+                live_sequence_plan=sequence,
+                game_version="3.7",
+            )
+
+        self.assertEqual(pack.schema_version, 2)
+        self.assertEqual(pack.live_sequence_plan.path.name, "live-sequence.json")
+
     def test_refuses_unsafe_reference_without_creating_output(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -105,7 +148,7 @@ class SourceGamePackTest(unittest.TestCase):
             manifest.write_text(json.dumps(document), encoding="utf-8")
             output = root / "pack"
 
-            with self.assertRaisesRegex(SourceGamePackError, "safe POSIX-relative"):
+            with self.assertRaisesRegex(SourceGamePackError, "safe (?:POSIX-)?relative"):
                 export_source_game_pack(
                     output,
                     story_index=story,
