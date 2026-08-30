@@ -47,6 +47,7 @@ r1999-bootstrap = "r1999extractor.bootstrap:main"
 r1999-update-diff = "r1999extractor.update_diff:main"
 r1999-source-pack = "r1999extractor.source_pack:main"
 r1999-source-audio-duration = "r1999extractor.source_audio_duration:main"
+r1999-source-audio-semantics = "r1999extractor.source_audio_semantics:main"
 
 [tool.setuptools.packages.find]
 include = ["r1999extractor*"]
