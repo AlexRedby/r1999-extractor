@@ -1,9 +1,18 @@
+import hashlib
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from r1999extractor.bootstrap import BootstrapError, bootstrap_local_artifacts, main
+from r1999extractor.bootstrap import (
+    PLAYER_VOICE_CANDIDATES_FIELD,
+    BootstrapError,
+    bootstrap_local_artifacts,
+    main,
+    prepare_player_voice_candidates,
+)
+from r1999extractor.story_voice_candidates import REPORT_SCHEMA, REPORT_VERSION
 
 
 class BootstrapTest(unittest.TestCase):
@@ -70,6 +79,78 @@ class BootstrapTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         output.assert_called_once_with("Built 7 story lines and source artifacts")
+
+    def test_prepares_and_reuses_player_voice_candidate_manifest(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "reverse1999"
+            output.mkdir()
+            story = output / "story-index.jsonl"
+            story.write_text("story\n", encoding="utf-8")
+            (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
+            builds = []
+
+            def build(_story, _banks, roles, destination):
+                builds.append(tuple(roles))
+                destination.mkdir(parents=True)
+                reference = destination / "references" / "hero.wav"
+                reference.parent.mkdir()
+                reference.write_bytes(b"voice")
+                source_line = {
+                    "line_id": "line:source",
+                    "source_audio_id": "play_hero_7",
+                }
+                report = {
+                    "schema": REPORT_SCHEMA,
+                    "schema_version": REPORT_VERSION,
+                    "story_index": str(story.resolve()),
+                    "story_index_sha256": hashlib.sha256(story.read_bytes()).hexdigest(),
+                    "groups": [
+                        {
+                            "character": "Hero",
+                            "portrait": "hero.png",
+                            "source_bank": "hero.bnk",
+                            "recommended_media_ids_for_audition": [7],
+                        }
+                    ],
+                    "candidates": [
+                        {
+                            "character": "Hero",
+                            "portrait": "hero.png",
+                            "source_bank": "hero.bnk",
+                            "media_id": 7,
+                            "source_event_ids": [70],
+                            "reference": "references/hero.wav",
+                            "reference_sha256": hashlib.sha256(b"voice").hexdigest(),
+                            "source_lines": [source_line],
+                            "metrics": {"duration_seconds": 3.0, "quality_score": 100},
+                        }
+                    ],
+                }
+                report_path = destination / "report.json"
+                report_path.write_text(json.dumps(report), encoding="utf-8")
+                return report_path, report
+
+            with patch(
+                "r1999extractor.bootstrap.build_story_voice_candidates",
+                side_effect=build,
+            ):
+                first = prepare_player_voice_candidates(
+                    roles=("Hero",), data_directory=root
+                )
+                second = prepare_player_voice_candidates(
+                    roles=("Hero",), data_directory=root
+                )
+
+            manifest = json.loads(first.read_text(encoding="utf-8"))
+            evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
+
+        self.assertEqual(first, second)
+        self.assertEqual(builds, [("Hero",)])
+        self.assertEqual(len(manifest["voices"]), 1)
+        self.assertEqual(evidence["story_index_sha256"], hashlib.sha256(b"story\n").hexdigest())
+        self.assertEqual(evidence["variants"][0]["source_voice_ids"], ["play_hero_7"])
+        self.assertEqual(evidence["variants"][0]["source_line_ids"], ["line:source"])
 
 
 if __name__ == "__main__":
