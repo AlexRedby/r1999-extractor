@@ -724,7 +724,7 @@ requires-dist = [
     { name = "platformdirs", specifier = ">=4.3,<5" },
     { name = "pyside6", marker = "extra == 'ui'", specifier = "==6.10.1" },
     { name = "unitypy", specifier = ">=1.25,<2" },
-    { name = "vntts-artifacts", extras = ["audio"], git = "https://github.com/AlexRedby/vntts-artifacts.git?tag=v0.7.0" },
+    { name = "vntts-artifacts", extras = ["audio"], git = "https://github.com/AlexRedby/vntts-artifacts.git?rev=dd0459df41d596d649a5a3e33fb03f93024d5af9" },
 ]
 provides-extras = ["ui"]
 
@@ -872,8 +872,8 @@ wheels = [
 
 [[package]]
 name = "vntts-artifacts"
-version = "0.7.0"
-source = { git = "https://github.com/AlexRedby/vntts-artifacts.git?tag=v0.7.0#e83c24a409667af763ab321b24f36d90a84b29e7" }
+version = "0.7.2"
+source = { git = "https://github.com/AlexRedby/vntts-artifacts.git?rev=dd0459df41d596d649a5a3e33fb03f93024d5af9#dd0459df41d596d649a5a3e33fb03f93024d5af9" }
 dependencies = [
     { name = "durable-file" },
 ]
