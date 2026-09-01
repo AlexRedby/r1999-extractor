@@ -296,6 +296,16 @@ app-data. Their sorted `filename + NUL + file SHA-256 + newline` inventory
 SHA-256 is
 `d1e35cd761f7f1d9060a88bae09e9f663de7ecf4766530e070a90dba8094495a`.
 
+The ordinary player importer now performs this extraction automatically for
+the portrait identities attached to recommended voice candidates. It reads the
+exact Unity `Sprite`, writes `portraits/<portrait>.png`, and publishes the PNG
+SHA-256 beside the story-index-bound candidate evidence. A small source index
+reuses the located content-addressed bundle for the same story-index hash;
+known head-icon shards are tried first and a complete installed-bundle scan is
+only a forward-compatible fallback. A real extraction of all 11 portraits
+above reproduced every previously reviewed PNG byte-for-byte; the direct shard
+path completed in 0.86 seconds on the development Mac.
+
 No exact installed same-speaker route was found for `Poacher I` (13 blocked
 lines) or `Poacher II` (nine). Do not merge either numbered role with the
 separate `Poacher` identity merely because that role has one installed clip.

@@ -86,7 +86,21 @@ class BootstrapTest(unittest.TestCase):
             output = root / "reverse1999"
             output.mkdir()
             story = output / "story-index.jsonl"
-            story.write_text("story\n", encoding="utf-8")
+            bundles = root / "installed" / "bundles"
+            bundles.mkdir(parents=True)
+            source_bundle = bundles / "story.dat"
+            source_bundle.write_bytes(b"story bundle")
+            story.write_text(
+                json.dumps(
+                    {
+                        "record_type": "metadata",
+                        "source_bundle": str(source_bundle),
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            story_digest = hashlib.sha256(story.read_bytes()).hexdigest()
             (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
             builds = []
 
@@ -104,7 +118,7 @@ class BootstrapTest(unittest.TestCase):
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
                     "story_index": str(story.resolve()),
-                    "story_index_sha256": hashlib.sha256(story.read_bytes()).hexdigest(),
+                    "story_index_sha256": story_digest,
                     "groups": [
                         {
                             "character": "Hero",
@@ -134,7 +148,10 @@ class BootstrapTest(unittest.TestCase):
             with patch(
                 "r1999extractor.bootstrap.build_story_voice_candidates",
                 side_effect=build,
-            ):
+            ), patch(
+                "r1999extractor.bootstrap.extract_story_portraits",
+                return_value={"hero.png": "a" * 64},
+            ) as portraits:
                 first = prepare_player_voice_candidates(
                     roles=("Hero",), data_directory=root
                 )
@@ -147,10 +164,17 @@ class BootstrapTest(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(builds, [("Hero",)])
+        portraits.assert_called_once_with(
+            bundles.resolve(),
+            {"hero.png"},
+            (output / "portraits").resolve(),
+            cache_key=story_digest,
+        )
         self.assertEqual(len(manifest["voices"]), 1)
-        self.assertEqual(evidence["story_index_sha256"], hashlib.sha256(b"story\n").hexdigest())
+        self.assertEqual(evidence["story_index_sha256"], story_digest)
         self.assertEqual(evidence["variants"][0]["source_voice_ids"], ["play_hero_7"])
         self.assertEqual(evidence["variants"][0]["source_line_ids"], ["line:source"])
+        self.assertEqual(evidence["variants"][0]["portrait_image_sha256"], "a" * 64)
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ from r1999extractor.story_index import (
     resolve_story_audio,
     write_story_index,
 )
+from r1999extractor.story_portraits import StoryPortraitError, extract_story_portraits
 from r1999extractor.story_voice_candidates import (
     REPORT_SCHEMA,
     SUPPORTED_REPORT_VERSIONS,
@@ -44,7 +45,7 @@ from r1999extractor.structured_story import audit_story_like_tables
 
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
-PLAYER_VOICE_CANDIDATES_VERSION = 1
+PLAYER_VOICE_CANDIDATES_VERSION = 2
 
 
 class BootstrapError(RuntimeError):
@@ -84,11 +85,16 @@ def prepare_player_voice_candidates(*, roles, data_directory=None):
     report_path = directory / "report.json"
     manifest_path = directory / "manifest.json"
     if manifest_path.is_file():
-        manifest, _entries = load_voice_manifest(manifest_path, allow_legacy=False)
-        evidence = manifest.get(PLAYER_VOICE_CANDIDATES_FIELD, {})
-        if evidence.get("story_index_sha256") != story_sha256:
-            raise BootstrapError("Saved player voice candidates belong to another story index")
-        return manifest_path
+        try:
+            manifest, _entries = load_voice_manifest(manifest_path, allow_legacy=False)
+            evidence = manifest.get(PLAYER_VOICE_CANDIDATES_FIELD, {})
+            if (
+                evidence.get("story_index_sha256") == story_sha256
+                and evidence.get("schema_version") == PLAYER_VOICE_CANDIDATES_VERSION
+            ):
+                return manifest_path
+        except (OSError, RuntimeError, ValueError):
+            pass
     try:
         if report_path.is_file():
             report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -130,6 +136,20 @@ def _publish_player_voice_manifest(report_path, report, manifest_path, story_ind
         if isinstance(group, dict)
         for media_id in group.get("recommended_media_ids_for_audition", ())
     }
+    portrait_hashes = _prepare_player_portraits(
+        story_index,
+        {
+            candidate.get("portrait")
+            for candidate in report.get("candidates", ())
+            if (
+                candidate.get("character"),
+                candidate.get("portrait"),
+                candidate.get("source_bank"),
+                candidate.get("media_id"),
+            )
+            in recommended
+        },
+    )
     voices = []
     variants = []
     root = Path(report_path).resolve().parent
@@ -171,6 +191,10 @@ def _publish_player_voice_manifest(report_path, report, manifest_path, story_ind
                 "variant_id": variant_id,
                 "character": candidate["character"],
                 "portrait": candidate.get("portrait"),
+                "portrait_image_sha256": _portrait_hash(
+                    portrait_hashes,
+                    candidate.get("portrait"),
+                ),
                 "source_bank": candidate["source_bank"],
                 "source_voice_ids": sorted(
                     {
@@ -213,6 +237,34 @@ def _publish_player_voice_manifest(report_path, report, manifest_path, story_ind
     }
     write_voice_manifest(manifest_path, manifest)
     return manifest_path
+
+
+def _prepare_player_portraits(story_index, portraits):
+    try:
+        with Path(story_index).open(encoding="utf-8") as source:
+            metadata = json.loads(next(source))
+        if not isinstance(metadata, dict):
+            return {}
+        source_bundle = metadata.get("source_bundle")
+        if not isinstance(source_bundle, str) or not source_bundle.strip():
+            return {}
+        return extract_story_portraits(
+            Path(source_bundle).expanduser().resolve().parent,
+            portraits,
+            Path(story_index).resolve().parent / "portraits",
+            cache_key=sha256_file(story_index),
+        )
+    except (OSError, StopIteration, json.JSONDecodeError, StoryPortraitError):
+        return {}
+
+
+def _portrait_hash(hashes, portrait):
+    if portrait is None:
+        return None
+    text = str(portrait).strip()
+    if not text or "\\" in text or Path(text).name != text:
+        return None
+    return hashes.get(Path(text).with_suffix(".png").name)
 
 
 def bootstrap_local_artifacts(
