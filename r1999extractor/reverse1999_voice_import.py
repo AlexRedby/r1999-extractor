@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -110,10 +111,14 @@ def create_parser():
     return parser
 
 
-def find_game_audio_directory(home=None):
+def find_game_audio_directory(home=None, environment=None):
     home = Path.home() if home is None else Path(home)
+    environment = os.environ if environment is None else environment
     containers = home / "Library" / "Containers"
-    candidates = containers.glob("*/Data/Documents/ResLib/iOS/audios/iOS/en")
+    candidates = list(containers.glob("*/Data/Documents/ResLib/iOS/audios/iOS/en"))
+    local_app_data = environment.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.extend(Path(local_app_data).glob("**/ResLib/*/audios/*/en"))
     for candidate in candidates:
         if candidate.is_dir() and any(candidate.glob("*.bnk")):
             return candidate.resolve()

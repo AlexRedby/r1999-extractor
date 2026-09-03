@@ -11,6 +11,42 @@ from r1999extractor.wwise import EmbeddedMedia
 
 
 class Reverse1999GameVoiceImportTest(unittest.TestCase):
+    def test_finds_windows_english_audio_under_local_app_data(self):
+        with TemporaryDirectory() as temporary_directory:
+            local_app_data = Path(temporary_directory) / "LocalAppData"
+            audio = (
+                local_app_data
+                / "GameVendor"
+                / "Reverse1999"
+                / "ResLib"
+                / "Windows"
+                / "audios"
+                / "Windows"
+                / "en"
+            )
+            audio.mkdir(parents=True)
+            (audio / "story_voice.bnk").write_bytes(b"bank")
+
+            found = importer.find_game_audio_directory(
+                home=local_app_data / "home",
+                environment={"LOCALAPPDATA": str(local_app_data)},
+            )
+
+        self.assertEqual(found, audio.resolve())
+
+    def test_ignores_windows_audio_directory_without_banks(self):
+        with TemporaryDirectory() as temporary_directory:
+            local_app_data = Path(temporary_directory) / "LocalAppData"
+            audio = local_app_data / "Game" / "ResLib/Windows/audios/Windows/en"
+            audio.mkdir(parents=True)
+
+            found = importer.find_game_audio_directory(
+                home=local_app_data / "home",
+                environment={"LOCALAPPDATA": str(local_app_data)},
+            )
+
+        self.assertIsNone(found)
+
     def test_selects_longest_embedded_media_as_voice_references(self):
         first = b"RIFF-first"
         second = b"RIFF-second"
