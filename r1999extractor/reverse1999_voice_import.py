@@ -1,6 +1,5 @@
 import argparse
 import hashlib
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -21,6 +20,7 @@ from r1999extractor.reverse1999_catalog import (
     Reverse1999NpcCatalog,
     default_catalog_path,
 )
+from r1999extractor.reverse1999_config import game_resource_roots
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.voice_reference_quality import trim_and_normalize_voice_reference
 from r1999extractor.wwise import (
@@ -112,16 +112,10 @@ def create_parser():
 
 
 def find_game_audio_directory(home=None, environment=None):
-    home = Path.home() if home is None else Path(home)
-    environment = os.environ if environment is None else environment
-    containers = home / "Library" / "Containers"
-    candidates = list(containers.glob("*/Data/Documents/ResLib/iOS/audios/iOS/en"))
-    local_app_data = environment.get("LOCALAPPDATA")
-    if local_app_data:
-        candidates.extend(Path(local_app_data).glob("**/ResLib/*/audios/*/en"))
-    for candidate in candidates:
-        if candidate.is_dir() and any(candidate.glob("*.bnk")):
-            return candidate.resolve()
+    for root in game_resource_roots(home, environment):
+        for candidate in sorted((root / "audios").glob("*/en")):
+            if candidate.is_dir() and any(candidate.glob("*.bnk")):
+                return candidate.resolve()
     return None
 
 

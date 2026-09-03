@@ -113,8 +113,9 @@ then creates the bank index, merged NPC catalog, story index, and source audit.
 An optional local `npc-catalog-overlay.json` preserves manual name corrections
 and approved reference decisions without committing them.
 
-Automatic discovery supports the macOS/iOS-container installation layout and
-common Windows `ResLib` layouts:
+Automatic discovery supports the macOS/iOS-container layout, Windows Unity
+`LocalLow` data, the official PC client's default install, and default or
+custom Steam libraries:
 
 ```bash
 r1999-story-index

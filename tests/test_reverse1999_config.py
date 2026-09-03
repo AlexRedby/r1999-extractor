@@ -19,6 +19,8 @@ from r1999extractor.reverse1999_config import (
     parse_data_document,
     parse_language_document,
 )
+from r1999extractor.reverse1999_voice_import import find_game_audio_directory
+from r1999extractor.story_index import find_game_resource_root, story_bundle_filename
 
 
 def encrypt_config(document):
@@ -31,7 +33,74 @@ def encrypt_config(document):
     )
 
 
+def write_platform_resources(root):
+    configs = root / "configs"
+    (configs / "language").mkdir(parents=True)
+    (configs / "datacfg_1.dat").touch()
+    (configs / "language" / "json_language_en.json.dat").touch()
+    bundles = root / "bundles"
+    bundles.mkdir()
+    (bundles / story_bundle_filename).touch()
+    audio = root / "audios" / "Windows" / "en"
+    audio.mkdir(parents=True)
+    (audio / "story_voice.bnk").touch()
+    return configs, audio
+
+
 class Reverse1999ConfigTest(unittest.TestCase):
+    def test_finds_official_windows_client_resources(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            program_files = root / "Program Files (x86)"
+            platform = (
+                program_files
+                / "reverse1999_global"
+                / "Reverse1999en"
+                / "reverse1999_Data"
+                / "StreamingAssets"
+                / "PersistentRoot"
+            )
+            configs, audio = write_platform_resources(platform)
+            environment = {"ProgramFiles(x86)": str(program_files)}
+            home = root / "Users" / "player"
+
+            self.assertEqual(find_game_config_directory(home, environment), configs.resolve())
+            self.assertEqual(find_game_resource_root(home, environment), platform.resolve())
+            self.assertEqual(find_game_audio_directory(home, environment), audio.resolve())
+
+    def test_finds_custom_steam_library_resources(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            steam = root / "Steam"
+            library = root / "Games"
+            steamapps = steam / "steamapps"
+            steamapps.mkdir(parents=True)
+            (steamapps / "libraryfolders.vdf").write_text(
+                f'"libraryfolders" {{ "1" {{ "path" "{library}" }} }}',
+                encoding="utf-8",
+            )
+            library_steamapps = library / "steamapps"
+            library_steamapps.mkdir(parents=True)
+            (library_steamapps / "appmanifest_3092660.acf").write_text(
+                '"AppState" { "installdir" "Reverse 1999" }',
+                encoding="utf-8",
+            )
+            platform = (
+                library_steamapps
+                / "common"
+                / "Reverse 1999"
+                / "reverse1999_Data"
+                / "StreamingAssets"
+                / "Windows"
+            )
+            configs, audio = write_platform_resources(platform)
+            environment = {"STEAM_PATH": str(steam)}
+            home = root / "Users" / "player"
+
+            self.assertEqual(find_game_config_directory(home, environment), configs.resolve())
+            self.assertEqual(find_game_resource_root(home, environment), platform.resolve())
+            self.assertEqual(find_game_audio_directory(home, environment), audio.resolve())
+
     def test_decrypts_config_after_authenticated_header(self):
         document = {"hello": "world"}
         encrypted = encrypt_config(document)

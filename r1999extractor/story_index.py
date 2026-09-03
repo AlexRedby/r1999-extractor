@@ -1,7 +1,6 @@
 import argparse
 import hashlib
 import json
-import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -16,6 +15,7 @@ from r1999extractor.reverse1999_aliases import voice_character_for_speaker
 from r1999extractor.reverse1999_config import (
     Reverse1999ConfigError,
     find_game_config_directory,
+    game_resource_roots,
     load_config_directory,
 )
 from r1999extractor.reverse1999_index import (
@@ -641,15 +641,7 @@ def enrich_story_sources(lines, language, tables, *, include_non_speakable=False
 
 
 def find_game_resource_root(home=None, environment=None):
-    home = Path.home() if home is None else Path(home)
-    environment = os.environ if environment is None else environment
-    candidates = []
-    containers = home / "Library" / "Containers"
-    candidates.extend(containers.glob("*/Data/Documents/ResLib/iOS"))
-    local_app_data = environment.get("LOCALAPPDATA")
-    if local_app_data:
-        candidates.extend(Path(local_app_data).glob("**/ResLib/*"))
-    for candidate in candidates:
+    for candidate in game_resource_roots(home, environment):
         if (candidate / "bundles" / story_bundle_filename).is_file():
             return candidate.resolve()
     return None

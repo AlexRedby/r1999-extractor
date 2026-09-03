@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -106,17 +107,73 @@ def parse_data_document(document):
     return tables
 
 
-def find_game_config_directory(home=None, environment=None):
+def game_resource_roots(home=None, environment=None):
+    """Return known installed platform roots without scanning whole drives."""
     home = Path.home() if home is None else Path(home)
     environment = os.environ if environment is None else environment
-    candidates = []
-    containers = home / "Library" / "Containers"
-    candidates.extend(containers.glob("*/Data/Documents/ResLib/iOS/configs"))
+    candidates = list((home / "Library" / "Containers").glob("*/Data/Documents/ResLib/iOS"))
     local_app_data = environment.get("LOCALAPPDATA")
     if local_app_data:
-        root = Path(local_app_data)
-        candidates.extend(root.glob("**/ResLib/*/configs"))
+        candidates.extend(Path(local_app_data).glob("**/ResLib/*"))
+    candidates.extend((home / "AppData" / "LocalLow").glob("**/ResLib/*"))
+
+    program_files = tuple(
+        Path(value)
+        for name in ("ProgramFiles(x86)", "PROGRAMFILES(X86)", "ProgramFiles")
+        if (value := environment.get(name))
+    )
+    streaming_roots = [
+        root / "reverse1999_global" / "Reverse1999en" / "reverse1999_Data" / "StreamingAssets"
+        for root in program_files
+    ]
+    steam_roots = [root / "Steam" for root in program_files]
+    if environment.get("STEAM_PATH"):
+        steam_roots.insert(0, Path(environment["STEAM_PATH"]))
+    for steam_root in steam_roots:
+        libraries = [steam_root]
+        try:
+            library_text = (steam_root / "steamapps" / "libraryfolders.vdf").read_text(
+                encoding="utf-8"
+            )
+        except OSError:
+            pass
+        else:
+            libraries.extend(
+                Path(value.replace("\\\\", "\\"))
+                for value in re.findall(r'"path"\s+"([^"]+)"', library_text)
+            )
+        for library in libraries:
+            manifest = library / "steamapps" / "appmanifest_3092660.acf"
+            try:
+                manifest_text = manifest.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            match = re.search(r'"installdir"\s+"([^"]+)"', manifest_text)
+            if match:
+                streaming_roots.append(
+                    library
+                    / "steamapps"
+                    / "common"
+                    / match.group(1)
+                    / "reverse1999_Data"
+                    / "StreamingAssets"
+                )
+    for streaming_root in streaming_roots:
+        candidates.extend((streaming_root / "PersistentRoot", streaming_root / "Windows"))
+
+    unique = []
+    seen = set()
     for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate not in seen and candidate.is_dir():
+            seen.add(candidate)
+            unique.append(candidate)
+    return tuple(unique)
+
+
+def find_game_config_directory(home=None, environment=None):
+    for root in game_resource_roots(home, environment):
+        candidate = root / "configs"
         if (candidate / "datacfg_1.dat").is_file() and (
             candidate / "language" / "json_language_en.json.dat"
         ).is_file():
