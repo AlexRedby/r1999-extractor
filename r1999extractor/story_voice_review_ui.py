@@ -15,15 +15,18 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QHBoxLayout,
+    QGridLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from r1999extractor.story_voice_evidence import (
@@ -69,11 +72,16 @@ class StoryVoiceReviewDialog(QDialog):
         self.evidence_path, self.evidence = evidence_loader(self.report_path, evidence_path)
         self._visible_candidates: tuple[ReviewCandidate, ...] = ()
         self._playback_buffer = None
+        self._playing_candidate_key = None
+        self._heard_candidate_keys = set()
         self._portrait_snapshot = None
         self._ab_keys = {"A": None, "B": None}
+        self._notes_candidate_key = None
+        self._note_drafts = {}
 
         self.setWindowTitle("Character Story voice reference review")
-        self.setMinimumSize(1180, 720)
+        self.setMinimumSize(640, 480)
+        self.resize(1180, 720)
 
         self.summary = QLabel()
         self.summary.setWordWrap(True)
@@ -88,13 +96,13 @@ class StoryVoiceReviewDialog(QDialog):
             ["All evidence", "Obvious reject", "Speaker outlier", "ASR mismatch", "Not analyzed"]
         )
 
-        filters = QHBoxLayout()
-        filters.addWidget(QLabel("Find"))
-        filters.addWidget(self.search, 3)
-        filters.addWidget(QLabel("Decision"))
-        filters.addWidget(self.decision_filter, 1)
-        filters.addWidget(self.evidence_filter, 1)
-        filters.addWidget(self.recommended_only)
+        filters = QGridLayout()
+        filters.addWidget(QLabel("Find"), 0, 0)
+        filters.addWidget(self.search, 0, 1, 1, 3)
+        filters.addWidget(QLabel("Decision"), 1, 0)
+        filters.addWidget(self.decision_filter, 1, 1)
+        filters.addWidget(self.evidence_filter, 1, 2, 1, 2)
+        filters.addWidget(self.recommended_only, 2, 1, 1, 3)
 
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
@@ -131,57 +139,141 @@ class StoryVoiceReviewDialog(QDialog):
 
         self.previous_pending = QPushButton("Previous pending")
         self.play = QPushButton("Play")
-        self.stop = QPushButton("Stop")
+        self.stop = QPushButton("Stop playback")
+        self.stop.setEnabled(False)
         self.accept = QPushButton("Accept")
         self.reject = QPushButton("Reject")
         self.uncertain = QPushButton("Uncertain")
         self.next_pending = QPushButton("Next pending")
-        actions = QHBoxLayout()
-        for button in (
-            self.previous_pending,
-            self.play,
-            self.stop,
-            self.accept,
-            self.reject,
-            self.uncertain,
-            self.next_pending,
+        self.decision_reason = QLabel()
+        self.decision_reason.setWordWrap(True)
+        self.decision_reason.setAccessibleName("Character Story decision availability")
+        actions = QGridLayout()
+        for index, button in enumerate(
+            (
+                self.previous_pending,
+                self.play,
+                self.stop,
+                self.accept,
+                self.reject,
+                self.uncertain,
+                self.next_pending,
+            )
         ):
-            actions.addWidget(button)
+            actions.addWidget(button, index // 4, index % 4)
 
         self.set_a = QPushButton("Set current as A")
         self.play_a = QPushButton("Play A")
+        self.play_a.setEnabled(False)
         self.a_label = QLabel("A: not selected")
+        self.a_label.setWordWrap(True)
         self.set_b = QPushButton("Set current as B")
         self.play_b = QPushButton("Play B")
+        self.play_b.setEnabled(False)
         self.b_label = QLabel("B: not selected")
-        compare = QHBoxLayout()
-        for widget in (
-            self.set_a,
-            self.play_a,
-            self.a_label,
-            self.set_b,
-            self.play_b,
-            self.b_label,
-        ):
-            compare.addWidget(widget)
+        self.b_label.setWordWrap(True)
+        self.clear_ab = QPushButton("Clear A/B")
+        self.clear_ab.setEnabled(False)
+        self.clear_ab.setAccessibleName("Clear Character Story A/B comparison")
+        compare = QGridLayout()
+        compare.addWidget(self.set_a, 0, 0)
+        compare.addWidget(self.play_a, 0, 1)
+        compare.addWidget(self.a_label, 0, 2)
+        compare.addWidget(self.set_b, 1, 0)
+        compare.addWidget(self.play_b, 1, 1)
+        compare.addWidget(self.b_label, 1, 2)
+        compare.addWidget(self.clear_ab, 2, 0, 1, 2)
 
         self.status = QLabel()
         self.status.setWordWrap(True)
 
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        content_layout.addWidget(self.summary)
+        content_layout.addLayout(filters)
+        content_layout.addWidget(self.table, 1)
+        content_layout.addWidget(self.portrait_image)
+        content_layout.addWidget(self.details)
+        content_layout.addWidget(self.notes)
+        content_layout.addWidget(self.decision_reason)
+        content_layout.addLayout(actions)
+        content_layout.addLayout(compare)
+        content_layout.addWidget(self.status)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.scroll_area.setWidget(content)
         layout = QVBoxLayout(self)
-        layout.addWidget(self.summary)
-        layout.addLayout(filters)
-        layout.addWidget(self.table, 1)
-        layout.addWidget(self.portrait_image)
-        layout.addWidget(self.details)
-        layout.addWidget(self.notes)
-        layout.addLayout(actions)
-        layout.addLayout(compare)
-        layout.addWidget(self.status)
+        layout.addWidget(self.scroll_area)
+
+        controls = (
+            (self.search, "Search Character Story candidates", "Filter by identity or evidence"),
+            (self.decision_filter, "Filter by decision", "Show candidates with one decision state"),
+            (
+                self.evidence_filter,
+                "Filter by automatic evidence",
+                "Show candidates matching one evidence category",
+            ),
+            (
+                self.recommended_only,
+                "Recommended candidates only",
+                "Limit the table to recommended first-pass candidates",
+            ),
+            (self.table, "Character Story candidates", "Select one candidate to review"),
+            (self.notes, "Decision note", "Optional note retained per candidate until saved"),
+            (
+                self.previous_pending,
+                "Previous pending candidate",
+                "Select the previous undecided candidate",
+            ),
+            (self.play, "Play selected candidate", "Play the checksum-verified selected reference"),
+            (self.stop, "Stop candidate playback", "Stop the currently playing reference"),
+            (
+                self.accept,
+                "Accept selected candidate",
+                "Save an accept decision after complete playback",
+            ),
+            (
+                self.reject,
+                "Reject selected candidate",
+                "Save a reject decision after complete playback",
+            ),
+            (
+                self.uncertain,
+                "Mark selected candidate uncertain",
+                "Save an uncertain decision after complete playback",
+            ),
+            (self.next_pending, "Next pending candidate", "Select the next undecided candidate"),
+            (
+                self.set_a,
+                "Set selected candidate as A",
+                "Assign the selected candidate to comparison slot A",
+            ),
+            (self.play_a, "Play comparison candidate A", "Play the candidate assigned to slot A"),
+            (
+                self.set_b,
+                "Set selected candidate as B",
+                "Assign the selected candidate to comparison slot B",
+            ),
+            (self.play_b, "Play comparison candidate B", "Play the candidate assigned to slot B"),
+            (
+                self.clear_ab,
+                "Clear Character Story A/B comparison",
+                "Clear both comparison slots and stop playback",
+            ),
+        )
+        for widget, name, description in controls:
+            widget.setAccessibleName(name)
+            widget.setAccessibleDescription(description)
+        focus_order = tuple(widget for widget, _name, _description in controls)
+        for current, following in zip(focus_order, focus_order[1:]):
+            self.setTabOrder(current, following)
 
         self.audio_output = audio_output_factory(self)
         self.player = player_factory(self)
         self.player.setAudioOutput(self.audio_output)
+        self.player.mediaStatusChanged.connect(self._media_status_changed)
         self.player.errorOccurred.connect(self._media_error)
 
         self.search.textChanged.connect(self.refresh)
@@ -200,6 +292,7 @@ class StoryVoiceReviewDialog(QDialog):
         self.set_b.clicked.connect(lambda: self._set_ab("B"))
         self.play_a.clicked.connect(lambda: self._play_ab("A"))
         self.play_b.clicked.connect(lambda: self._play_ab("B"))
+        self.clear_ab.clicked.connect(self._clear_ab)
 
         self._shortcuts = []
         self._add_shortcut("Space", self.play_selected)
@@ -360,20 +453,37 @@ class StoryVoiceReviewDialog(QDialog):
         self._selection_changed()
 
     def _selection_changed(self):
+        previous_note = self._preserve_note_draft()
         candidate = self._selected_candidate()
         enabled = candidate is not None
         for button in (
             self.play,
-            self.accept,
-            self.reject,
-            self.uncertain,
             self.set_a,
             self.set_b,
         ):
             button.setEnabled(enabled)
+        decision_enabled = bool(
+            candidate is not None and candidate.key in self._heard_candidate_keys
+        )
+        reason = (
+            "Decision ready: this candidate played completely."
+            if decision_enabled
+            else "Decision locked: play this candidate completely before choosing."
+        )
+        self.decision_reason.setText(reason)
+        for button, action in (
+            (self.accept, "Accept this candidate"),
+            (self.reject, "Reject this candidate"),
+            (self.uncertain, "Mark this candidate uncertain"),
+        ):
+            button.setEnabled(decision_enabled)
+            button.setAccessibleDescription(
+                action if decision_enabled else f"Unavailable. {reason}"
+            )
         self.previous_pending.setEnabled(self.session.pending_count > 0)
         self.next_pending.setEnabled(self.session.pending_count > 0)
         if candidate is None:
+            self._notes_candidate_key = None
             self._portrait_snapshot = None
             self.portrait_image.clear()
             self.details.setText("No candidate matches the active filter.")
@@ -381,7 +491,16 @@ class StoryVoiceReviewDialog(QDialog):
             return
         decision = self.session.decisions.get(candidate.key, {})
         self._show_portrait(candidate)
-        self.notes.setText(decision.get("notes", ""))
+        self.notes.setText(
+            self._note_drafts[candidate.key]
+            if candidate.key in self._note_drafts
+            else decision.get("notes", "")
+        )
+        self._notes_candidate_key = candidate.key
+        if previous_note is not None and previous_note.key != candidate.key:
+            self.status.setText(
+                f"Draft note kept for {previous_note.character} / media {previous_note.media_id}."
+            )
         lines = ", ".join(value for value in candidate.line_ids if value) or "not recorded"
         context_parts = []
         for title, (previous, following) in zip(
@@ -427,6 +546,21 @@ class StoryVoiceReviewDialog(QDialog):
             f"transcript conflict: {'yes' if candidate.transcript_conflict else 'no'}; "
             f"recommended: {'yes' if candidate.recommended else 'no'}"
         )
+
+    def _preserve_note_draft(self):
+        key = self._notes_candidate_key
+        if key is None:
+            return None
+        candidate = self._candidate_by_key(key)
+        if candidate is None:
+            return None
+        persisted = self.session.decisions.get(key, {}).get("notes", "")
+        current = self.notes.text()
+        if current == persisted:
+            self._note_drafts.pop(key, None)
+            return None
+        self._note_drafts[key] = current
+        return candidate
 
     def _portrait_payload(self, candidate):
         if self.portrait_directory is None or not candidate.portrait:
@@ -534,6 +668,8 @@ class StoryVoiceReviewDialog(QDialog):
             self.status.setText("PLAYBACK BLOCKED: unable to open immutable audio buffer")
             return
         self._playback_buffer = playback
+        self._playing_candidate_key = candidate.key
+        self.stop.setEnabled(True)
         self.player.setSourceDevice(playback, QUrl("r1999-story-reference.wav"))
         self.player.play()
         self.status.setText(
@@ -549,6 +685,8 @@ class StoryVoiceReviewDialog(QDialog):
 
     def stop_playback(self, *, clear_status=True):
         self.player.stop()
+        self.stop.setEnabled(False)
+        self._playing_candidate_key = None
         playback = self._playback_buffer
         self._playback_buffer = None
         if playback is not None:
@@ -561,6 +699,11 @@ class StoryVoiceReviewDialog(QDialog):
     def save_decision(self, decision):
         candidate = self._selected_candidate()
         if candidate is None:
+            return
+        if candidate.key not in self._heard_candidate_keys:
+            self.status.setText(
+                "DECISION NOT SAVED: play this candidate completely before choosing."
+            )
             return
         try:
             portrait_unchanged = self._portrait_is_unchanged(candidate)
@@ -584,18 +727,56 @@ class StoryVoiceReviewDialog(QDialog):
         self.status.setText(
             f"SAVED {decision.upper()}: {candidate.character} / media {candidate.media_id}."
         )
+        self._note_drafts.pop(candidate.key, None)
         self.refresh(selected_key=candidate.key)
 
     def _set_ab(self, slot):
         candidate = self._selected_candidate()
         if candidate is None:
             return
+        other_slot = "B" if slot == "A" else "A"
+        other = self._candidate_by_key(self._ab_keys[other_slot])
+        if other is not None and other.key == candidate.key:
+            self.status.setText("A/B comparison blocked: choose two different candidates.")
+            return
+        if other is not None and other.character != candidate.character:
+            self.status.setText(
+                "A/B comparison blocked: both candidates must belong to the same character."
+            )
+            return
         self._ab_keys[slot] = candidate.key
         label = self.a_label if slot == "A" else self.b_label
         label.setText(f"{slot}: {candidate.character} / {candidate.media_id}")
-        (self.play_a if slot == "A" else self.play_b).setEnabled(True)
+        self._update_ab_controls()
+
+    def _update_ab_controls(self):
+        self.play_a.setEnabled(self._ab_keys["A"] is not None)
+        self.play_b.setEnabled(self._ab_keys["B"] is not None)
+        self.clear_ab.setEnabled(any(self._ab_keys.values()))
+
+    def _clear_ab(self):
+        self.stop_playback(clear_status=False)
+        self._ab_keys = {"A": None, "B": None}
+        self.a_label.setText("A: not selected")
+        self.b_label.setText("B: not selected")
+        self._update_ab_controls()
+        self.status.setText("A/B comparison cleared.")
+
+    def _ab_is_valid(self):
+        first = self._candidate_by_key(self._ab_keys["A"])
+        second = self._candidate_by_key(self._ab_keys["B"])
+        return (
+            first is None
+            or second is None
+            or (first.key != second.key and first.character == second.character)
+        )
 
     def _play_ab(self, slot):
+        if not self._ab_is_valid():
+            self.status.setText(
+                "A/B comparison blocked: choose different candidates for one character."
+            )
+            return
         candidate = self._candidate_by_key(self._ab_keys[slot])
         if candidate is None:
             self.status.setText(f"A/B slot {slot} has no candidate.")
@@ -603,7 +784,23 @@ class StoryVoiceReviewDialog(QDialog):
         self._play_candidate(candidate)
 
     def _media_error(self, _error, message):
+        self._playing_candidate_key = None
+        self.stop.setEnabled(False)
         self.status.setText(f"PLAYBACK ERROR: {message}")
+
+    def _media_status_changed(self, status):
+        if status != QMediaPlayer.MediaStatus.EndOfMedia or self._playing_candidate_key is None:
+            return
+        candidate_key = self._playing_candidate_key
+        self._playing_candidate_key = None
+        self.stop.setEnabled(False)
+        self._heard_candidate_keys.add(candidate_key)
+        candidate = self._candidate_by_key(candidate_key)
+        if candidate is not None:
+            self.status.setText(
+                f"HEARD COMPLETELY: {candidate.character} / media {candidate.media_id}."
+            )
+        self._selection_changed()
 
     def closeEvent(self, event):
         self.stop_playback(clear_status=False)

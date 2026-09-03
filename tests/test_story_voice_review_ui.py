@@ -15,6 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import Qt  # noqa: E402
+    from PySide6.QtMultimedia import QMediaPlayer  # noqa: E402
     from PySide6.QtTest import QTest  # noqa: E402
     from PySide6.QtWidgets import QApplication, QTableWidget  # noqa: E402
 
@@ -36,10 +37,14 @@ class _Signal:
     def connect(self, callback):
         self.callback = callback
 
+    def emit(self, value):
+        self.callback(value)
+
 
 class _Player:
     def __init__(self, _parent):
         self.errorOccurred = _Signal()
+        self.mediaStatusChanged = _Signal()
         self.source_device = None
 
     def setAudioOutput(self, output):
@@ -56,6 +61,9 @@ class _Player:
 
     def stop(self):
         pass
+
+    def finish(self):
+        self.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.EndOfMedia)
 
 
 class _AudioOutput:
@@ -193,8 +201,64 @@ class StoryVoiceReviewDialogTest(unittest.TestCase):
         self.dialog.table.setCurrentCell(1, 0)
         self.assertEqual(self.dialog.portrait_image.text(), "Exact game portrait is not installed")
 
-    def test_playback_keeps_decision_actions_enabled_and_uses_verified_buffer(self):
+    def test_scaled_layout_accessibility_focus_order_and_stop_state(self):
+        controls = (
+            self.dialog.search,
+            self.dialog.decision_filter,
+            self.dialog.evidence_filter,
+            self.dialog.recommended_only,
+            self.dialog.table,
+            self.dialog.notes,
+            self.dialog.previous_pending,
+            self.dialog.play,
+            self.dialog.stop,
+            self.dialog.accept,
+            self.dialog.reject,
+            self.dialog.uncertain,
+            self.dialog.next_pending,
+            self.dialog.set_a,
+            self.dialog.play_a,
+            self.dialog.set_b,
+            self.dialog.play_b,
+            self.dialog.clear_ab,
+        )
+        for control in controls:
+            self.assertTrue(control.accessibleName(), type(control).__name__)
+            self.assertTrue(control.accessibleDescription(), type(control).__name__)
+        for current, following in zip(controls, controls[1:]):
+            next_control = current.nextInFocusChain()
+            while not next_control.focusPolicy() & Qt.FocusPolicy.TabFocus:
+                next_control = next_control.nextInFocusChain()
+            self.assertIs(next_control, following)
+
+        self.assertEqual(self.dialog.stop.text(), "Stop playback")
+        self.assertFalse(self.dialog.stop.isEnabled())
+        self.dialog.play_selected()
+        self.assertTrue(self.dialog.stop.isEnabled())
+        self.dialog.player.finish()
+        self.assertFalse(self.dialog.stop.isEnabled())
+
+        base_font = self.dialog.font()
+        for scale in (1.5, 2.0):
+            with self.subTest(scale=scale):
+                font = self.dialog.font()
+                font.setPointSizeF(base_font.pointSizeF() * scale)
+                self.dialog.setFont(font)
+                self.dialog.resize(640, 480)
+                self.application.processEvents()
+                self.assertGreater(self.dialog.scroll_area.verticalScrollBar().maximum(), 0)
+                self.dialog.scroll_area.ensureWidgetVisible(self.dialog.clear_ab)
+                self.application.processEvents()
+                self.assertGreater(self.dialog.scroll_area.verticalScrollBar().value(), 0)
+
+    def test_decision_requires_complete_playback_and_uses_verified_buffer(self):
         candidate = self.dialog._selected_candidate()
+
+        self.assertFalse(self.dialog.accept.isEnabled())
+        self.assertIn("play this candidate completely", self.dialog.decision_reason.text())
+        self.assertIn("Unavailable", self.dialog.accept.accessibleDescription())
+        self.dialog.save_decision("accept")
+        self.assertFalse(self.dialog.session.decisions.get(candidate.key))
 
         self.dialog.play_selected()
 
@@ -203,12 +267,32 @@ class StoryVoiceReviewDialogTest(unittest.TestCase):
             hashlib.sha256(bytes(self.dialog._playback_buffer.data())).hexdigest(),
             candidate.reference_sha256,
         )
+        self.assertFalse(self.dialog.accept.isEnabled())
+        self.dialog.stop_playback()
+        self.dialog.player.finish()
+        self.assertFalse(self.dialog.accept.isEnabled())
+
+        self.dialog.play_selected()
+        self.dialog.player.finish()
+
         self.assertTrue(self.dialog.accept.isEnabled())
         self.assertTrue(self.dialog.reject.isEnabled())
         self.assertTrue(self.dialog.uncertain.isEnabled())
+        self.assertIn("Decision ready", self.dialog.decision_reason.text())
+
+        self.dialog.play_selected()
+        self.assertTrue(self.dialog.accept.isEnabled())
+
+        self.dialog.recommended_only.setChecked(False)
+        self.dialog.table.setCurrentCell(1, 0)
+        self.assertFalse(self.dialog.accept.isEnabled())
+        self.dialog.table.setCurrentCell(0, 0)
+        self.assertTrue(self.dialog.accept.isEnabled())
 
     def test_ctrl_enter_accepts_without_starting_cell_edit(self):
         candidate = self.dialog._selected_candidate()
+        self.dialog.play_selected()
+        self.dialog.player.finish()
 
         QTest.keyClick(
             self.dialog.table,
@@ -221,32 +305,80 @@ class StoryVoiceReviewDialogTest(unittest.TestCase):
         self.assertEqual(session.decisions[candidate.key]["decision"], "accept")
         self.assertTrue(self.dialog.reject.isEnabled())
 
-    def test_pending_navigation_and_ab_slots_have_fixed_controls(self):
+    def test_ab_slots_reject_duplicate_cross_character_pairs_and_clear(self):
+        self.assertFalse(self.dialog.play_a.isEnabled())
+        self.assertFalse(self.dialog.play_b.isEnabled())
+        self.assertFalse(self.dialog.clear_ab.isEnabled())
         self.dialog.recommended_only.setChecked(False)
         first = self.dialog._selected_candidate()
         self.dialog._set_ab("A")
+
+        self.assertTrue(self.dialog.play_a.isEnabled())
+        self.assertFalse(self.dialog.play_b.isEnabled())
+        self.assertTrue(self.dialog.clear_ab.isEnabled())
+        self.dialog._set_ab("B")
+        self.assertIsNone(self.dialog._ab_keys["B"])
+        self.assertIn("two different candidates", self.dialog.status.text())
+
         self.dialog._move_pending(1)
         second = self.dialog._selected_candidate()
         self.dialog._set_ab("B")
 
         self.assertNotEqual(first.key, second.key)
         self.assertIn(str(first.media_id), self.dialog.a_label.text())
-        self.assertIn(str(second.media_id), self.dialog.b_label.text())
-        self.assertTrue(self.dialog.play_a.isEnabled())
-        self.assertTrue(self.dialog.play_b.isEnabled())
+        self.assertEqual(self.dialog.b_label.text(), "B: not selected")
+        self.assertFalse(self.dialog.play_b.isEnabled())
+        self.assertIn("same character", self.dialog.status.text())
+
+        self.dialog._ab_keys["B"] = second.key
+        self.dialog._play_ab("A")
+        self.assertIn("one character", self.dialog.status.text())
+
+        self.dialog._clear_ab()
+        self.assertEqual(self.dialog._ab_keys, {"A": None, "B": None})
+        self.assertFalse(self.dialog.play_a.isEnabled())
+        self.assertFalse(self.dialog.play_b.isEnabled())
+        self.assertFalse(self.dialog.clear_ab.isEnabled())
+        self.assertEqual(self.dialog.a_label.text(), "A: not selected")
+
+    def test_changed_note_is_kept_per_candidate_until_saved(self):
+        self.dialog.recommended_only.setChecked(False)
+        first = self.dialog._selected_candidate()
+        self.dialog.notes.setText("Keep this exact decision note")
+
+        self.dialog.table.setCurrentCell(1, 0)
+
+        self.assertEqual(self.dialog.notes.text(), "")
+        self.assertIn("Draft note kept", self.dialog.status.text())
+        self.dialog.table.setCurrentCell(0, 0)
+        self.assertEqual(self.dialog.notes.text(), "Keep this exact decision note")
+
+        self.dialog.play_selected()
+        self.dialog.player.finish()
+        self.dialog.save_decision("accept")
+
+        saved = load_review_session(self.report)
+        self.assertEqual(
+            saved.decisions[first.key]["notes"],
+            "Keep this exact decision note",
+        )
+        self.assertNotIn(first.key, self.dialog._note_drafts)
 
     def test_changed_reference_blocks_playback_and_decision(self):
         candidate = self.dialog._selected_candidate()
         candidate.reference.write_bytes(b"replacement")
 
         self.dialog.play_selected()
-        self.dialog.save_decision("accept")
 
         self.assertIn("checksum changed", self.dialog.status.text())
+        self.assertFalse(self.dialog.accept.isEnabled())
+        self.dialog.save_decision("accept")
         self.assertFalse(self.dialog.session.decisions.get(candidate.key))
 
     def test_changed_portrait_blocks_decision_after_display(self):
         candidate = self.dialog._selected_candidate()
+        self.dialog.play_selected()
+        self.dialog.player.finish()
         self._write_png(self.portraits / "534704.png", red=210)
 
         self.dialog.save_decision("accept")
