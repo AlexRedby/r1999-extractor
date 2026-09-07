@@ -3,6 +3,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from r1999extractor.bootstrap import (
@@ -12,10 +13,97 @@ from r1999extractor.bootstrap import (
     main,
     prepare_player_voice_candidates,
 )
-from r1999extractor.story_voice_candidates import REPORT_SCHEMA, REPORT_VERSION
+from r1999extractor.story_audio import wwise_event_id
+from r1999extractor.story_voice_candidates import (
+    REPORT_SCHEMA,
+    REPORT_VERSION,
+    collect_story_voice_lines,
+)
+from tests.test_playable_voice import character_row, voice_row
 
 
 class BootstrapTest(unittest.TestCase):
+    def test_playable_voice_is_available_only_in_narrator_index(self):
+        tables = {
+            "json_character": [character_row(3141, "centurion", "Centurion")],
+            "json_character_voice": [
+                voice_row(3141, 1314101, "first", "Hello there.#0|Welcome.#2.5"),
+                voice_row(3141, 1314102, "missing", "Not installed."),
+            ],
+            "json_story_audio_role": [[1314101, "play_hero3141_mainvoc_1", "hero3141_mainvoc"]],
+        }
+        bank_index = {
+            "version": 4,
+            "game_audio_directory": "/game/en",
+            "banks": [
+                {
+                    "filename": "hero3141_mainvoc.bnk",
+                    "events": [
+                        {"event_id": wwise_event_id("play_hero3141_mainvoc_1"), "media_ids": [42]}
+                    ],
+                    "embedded_media_ids": [42],
+                }
+            ],
+        }
+        bank_index["banks"].append(
+            {"filename": "hero3141_mainstory.bnk", "embedded_media_ids": [7]}
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch(
+                    "r1999extractor.bootstrap.load_config_directory",
+                    return_value=({"centurion": "Centurion"}, tables),
+                ),
+                patch(
+                    "r1999extractor.bootstrap.build_bank_index",
+                    return_value=(bank_index, root / "bank.json"),
+                ),
+                patch(
+                    "r1999extractor.bootstrap.find_story_bundle", return_value=root / "story.dat"
+                ),
+                patch("r1999extractor.bootstrap.extract_story_lines", return_value=[]),
+                patch("r1999extractor.bootstrap.enrich_story_sources", return_value=[]),
+            ):
+                result = bootstrap_local_artifacts(
+                    config_directory=root, game_audio_directory=root, data_directory=root
+                )
+            lines, digest = collect_story_voice_lines(result["narrator_index"], ("Centurion",))
+            self.assertEqual(len(lines), 1)
+            self.assertEqual(lines[0].text, "Hello there. Welcome.")
+            self.assertEqual(lines[0].source_media_ids, (42,))
+            self.assertEqual(result["story_line_count"], 0)
+            (root / "reverse1999" / "english-bank-index.json").write_text("{}")
+            snapshot = SimpleNamespace(
+                sha256="a" * 64, media={7: b"voice"}, path=root / "hero3141_mainstory.bnk"
+            )
+            with (
+                patch("r1999extractor.bootstrap.snapshot_bank", return_value=snapshot) as bank,
+                patch("r1999extractor.bootstrap.resolve_decoder", return_value="decoder"),
+                patch("r1999extractor.bootstrap.decode_reference_data") as decode,
+                patch(
+                    "r1999extractor.bootstrap.update_manifest", return_value=root / "manifest.json"
+                ),
+            ):
+                prepare_player_voice_candidates(
+                    roles=("Centurion",), data_directory=root, narrator=True
+                )
+            self.assertEqual(bank.call_args.args[1], "hero3141_mainstory.bnk")
+            self.assertEqual(decode.call_args.args[0], b"voice")
+            (root / "reverse1999" / "narrator-banks.json").write_text("{}")
+            with (
+                patch(
+                    "r1999extractor.bootstrap.build_story_voice_candidates",
+                    return_value=(root / "report.json", {}),
+                ) as build,
+                patch("r1999extractor.bootstrap._publish_player_voice_manifest") as publish,
+            ):
+                prepare_player_voice_candidates(
+                    roles=("Centurion",), data_directory=root, narrator=True
+                )
+            self.assertEqual(build.call_args.args[0], result["narrator_index"])
+            self.assertEqual(publish.call_args.args[3], result["narrator_index"])
+
     def test_requires_discoverable_installed_inputs(self):
         with (
             patch("r1999extractor.bootstrap.find_game_config_directory", return_value=None),
@@ -145,19 +233,18 @@ class BootstrapTest(unittest.TestCase):
                 report_path.write_text(json.dumps(report), encoding="utf-8")
                 return report_path, report
 
-            with patch(
-                "r1999extractor.bootstrap.build_story_voice_candidates",
-                side_effect=build,
-            ), patch(
-                "r1999extractor.bootstrap.extract_story_portraits",
-                return_value={"hero.png": "a" * 64},
-            ) as portraits:
-                first = prepare_player_voice_candidates(
-                    roles=("Hero",), data_directory=root
-                )
-                second = prepare_player_voice_candidates(
-                    roles=("Hero",), data_directory=root
-                )
+            with (
+                patch(
+                    "r1999extractor.bootstrap.build_story_voice_candidates",
+                    side_effect=build,
+                ),
+                patch(
+                    "r1999extractor.bootstrap.extract_story_portraits",
+                    return_value={"hero.png": "a" * 64},
+                ) as portraits,
+            ):
+                first = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
+                second = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
 
             manifest = json.loads(first.read_text(encoding="utf-8"))
             evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]

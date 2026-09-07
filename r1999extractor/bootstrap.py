@@ -12,6 +12,7 @@ from vntts_artifacts.voice_manifest import (
 )
 
 from r1999extractor.cli import cli_error
+from r1999extractor.playable_voice import extract_playable_voice_lines
 from r1999extractor.reverse1999_catalog import (
     _load_overlay,
     build_catalog_document,
@@ -19,16 +20,20 @@ from r1999extractor.reverse1999_catalog import (
     write_catalog,
 )
 from r1999extractor.reverse1999_config import (
+    extract_character_identities,
     find_game_config_directory,
     load_config_directory,
 )
 from r1999extractor.reverse1999_index import build_bank_index
 from r1999extractor.reverse1999_voice_import import (
+    decode_reference_data,
     find_game_audio_directory,
+    update_manifest,
 )
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.story_audio import StoryAudioResolver, build_audio_registry
 from r1999extractor.story_index import (
+    StoryLine,
     enrich_story_sources,
     extract_story_lines,
     find_story_bundle,
@@ -40,8 +45,10 @@ from r1999extractor.story_voice_candidates import (
     REPORT_SCHEMA,
     SUPPORTED_REPORT_VERSIONS,
     build_story_voice_candidates,
+    snapshot_bank,
 )
 from r1999extractor.structured_story import audit_story_like_tables
+from r1999extractor.wwise import resolve_decoder
 
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
@@ -52,7 +59,7 @@ class BootstrapError(RuntimeError):
     pass
 
 
-def prepare_player_voice_candidates(*, roles, data_directory=None):
+def prepare_player_voice_candidates(*, roles, data_directory=None, narrator=False):
     """Build or reuse safe, selected-role candidates for the player workflow."""
     roles = tuple(
         sorted(
@@ -63,13 +70,37 @@ def prepare_player_voice_candidates(*, roles, data_directory=None):
     if not roles:
         raise BootstrapError("At least one voice candidate role is required")
     output = (
-        Path(data_directory or get_local_data_directory()).expanduser().resolve()
-        / "reverse1999"
+        Path(data_directory or get_local_data_directory()).expanduser().resolve() / "reverse1999"
     )
-    story_index = output / "story-index.jsonl"
+    story_index = output / ("narrator-index.jsonl" if narrator else "story-index.jsonl")
     bank_index = output / "english-bank-index.json"
     if not story_index.is_file() or not bank_index.is_file():
         raise BootstrapError("Import the installed game before preparing character voices")
+    if narrator and len(roles) == 1:
+        catalog = json.loads((output / "narrator-banks.json").read_text(encoding="utf-8"))
+        bank = catalog.get(roles[0])
+        if bank:
+            snapshot = snapshot_bank(json.loads(bank_index.read_text(encoding="utf-8")), bank)
+            directory = output / "voice-candidates" / f"narrator-{snapshot.sha256}"
+            decoder = resolve_decoder("vgmstream-cli")
+            # The character-specific bank has no bound transcript; audition its largest clips.
+            selected = sorted(
+                snapshot.media, key=lambda mid: len(snapshot.media[mid]), reverse=True
+            )[:3]
+            if not selected:
+                raise BootstrapError(f"No embedded voice clips in {bank}")
+            for media_id in selected:
+                reference = decode_reference_data(
+                    snapshot.media[media_id],
+                    directory / "references" / f"{media_id}.wav",
+                    media_id,
+                    decoder,
+                    bank=bank,
+                )
+                manifest = update_manifest(
+                    directory, f"{roles[0]} clip {media_id}", [reference], snapshot.path
+                )
+            return manifest
     story_sha256 = sha256_file(story_index)
     identity = hashlib.sha256(
         json.dumps(
@@ -174,9 +205,7 @@ def _publish_player_voice_manifest(report_path, report, manifest_path, story_ind
         variant_id = hashlib.sha256(
             json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        voice_character = (
-            f"Player candidate {candidate['character']} {variant_id[:12]}"
-        )
+        voice_character = f"Player candidate {candidate['character']} {variant_id[:12]}"
         voices.append(
             {
                 "character": voice_character,
@@ -200,8 +229,7 @@ def _publish_player_voice_manifest(report_path, report, manifest_path, story_ind
                     {
                         str(line.get("source_audio_id") or "").strip()
                         for line in source_lines
-                        if isinstance(line, dict)
-                        and str(line.get("source_audio_id") or "").strip()
+                        if isinstance(line, dict) and str(line.get("source_audio_id") or "").strip()
                     }
                 ),
                 "voice_character": voice_character,
@@ -314,6 +342,58 @@ def bootstrap_local_artifacts(
     lines = resolve_story_audio(lines, resolver)
     story_path = write_story_index(lines, output / "story-index.jsonl", bundle=bundle)
 
+    progress("Indexing playable narrator voices")
+    narrator_lines = list(lines)
+    installed_banks = {
+        entry["filename"] for entry in bank_index["banks"] if entry.get("embedded_media_ids")
+    }
+    narrator_banks = {}
+    voiced_ids = {
+        str(row[0])
+        for row in tables.get("json_character_voice", ())
+        if isinstance(row, list) and len(row) > 16 and str(row[1]).strip()
+    }
+    for identity in extract_character_identities(language, tables).values():
+        bank = f"hero{identity.character_id}_mainstory.bnk"
+        if bank in installed_banks:
+            narrator_banks[identity.display_name] = bank
+        if identity.character_id not in voiced_ids:
+            continue
+        for sequence, voice in enumerate(
+            extract_playable_voice_lines(language, tables, identity.character_id, resolver)
+        ):
+            if voice.source_audio_status != "installed" or not voice.text.strip():
+                continue
+            narrator_lines.append(
+                StoryLine(
+                    record_type="line",
+                    line_id=f"playable-voice:{identity.character_id}:{voice.voice_id}:{sequence}",
+                    chapter=f"playable-voice:{identity.character_id}",
+                    sequence=sequence,
+                    speaker=voice.character,
+                    voice_character=voice.character,
+                    text=voice.text,
+                    text_sha256=voice.text_sha256,
+                    source=voice.source_table,
+                    portrait=None,
+                    source_voice_id=voice.voice_id,
+                    source_voice_spec=None,
+                    display_seconds=None,
+                    kind="dialogue",
+                    audio_status=voice.source_audio_status,
+                    audio_reason=voice.source_audio_reason,
+                    source_event=voice.source_event,
+                    source_bank=voice.source_bank,
+                    source_media_ids=voice.source_media_ids,
+                    available_media_ids=voice.available_media_ids,
+                    source_kind=voice.source_kind,
+                )
+            )
+    narrator_path = write_story_index(
+        narrator_lines, output / "narrator-index.jsonl", bundle=bundle
+    )
+    atomic_write_json(output / "narrator-banks.json", narrator_banks, sort_keys=True)
+
     progress("Auditing story source coverage")
     audit = audit_story_like_tables(language, tables)
     audit.update({"schema": "r1999.story-source-audit", "schema_version": 1})
@@ -322,6 +402,7 @@ def bootstrap_local_artifacts(
         "bank_index": bank_index_path,
         "catalog": catalog_path,
         "story_index": story_path,
+        "narrator_index": narrator_path,
         "source_audit": audit_path,
         "story_line_count": len(lines),
     }
@@ -338,6 +419,7 @@ def create_parser():
     parser.add_argument("--overlay", type=Path)
     parser.add_argument("--game-version", default="installed")
     parser.add_argument("--prepare-voice-candidates-only", action="store_true")
+    parser.add_argument("--narrator", action="store_true")
     parser.add_argument("--voice-candidate-role", action="append", default=[])
     return parser
 
@@ -349,6 +431,7 @@ def main(arguments=None):
             manifest = prepare_player_voice_candidates(
                 roles=options.voice_candidate_role,
                 data_directory=options.data_directory,
+                narrator=options.narrator,
             )
             print(json.dumps({"voice_manifest": str(manifest)}, sort_keys=True))
             return 0
