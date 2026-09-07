@@ -17,6 +17,9 @@ from r1999extractor.reverse1999_config import (
     load_config_directory,
 )
 from r1999extractor.reverse1999_index import (
+    bank_external_media_root,
+)
+from r1999extractor.reverse1999_index import (
     default_output as default_bank_index,
 )
 from r1999extractor.reverse1999_index import (
@@ -313,7 +316,6 @@ def _bank_entries(bank_index):
 def bind_playable_voice_provenance(lines, bank_index):
     validate_bank_index_document(bank_index)
     audio_root = Path(bank_index["game_audio_directory"]).expanduser().resolve()
-    external_root = (audio_root.parent / "Media").resolve()
     entries = _bank_entries(bank_index)
     banks = {}
     bound = []
@@ -357,6 +359,7 @@ def bind_playable_voice_provenance(lines, bank_index):
             routes = {route.event_id: route.media_ids for route in summary.event_routes}
             banks[key] = (hashlib.sha256(bank_data).hexdigest(), media, routes)
         bank_sha256, embedded, routes = banks[key]
+        external_root = bank_external_media_root(bank_index, entry)
         if not line.source_event:
             raise PlayableVoiceError(f"Installed voice {line.voice_id} has no source event")
         fresh_media_ids = routes.get(wwise_event_id(line.source_event))

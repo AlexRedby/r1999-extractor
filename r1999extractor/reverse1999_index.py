@@ -25,18 +25,68 @@ class Reverse1999IndexError(RuntimeError):
     pass
 
 
-def discover_bank_files(root):
+def audio_bank_layout(root):
+    """Recognize the packaged/downloaded Windows overlay, not other languages."""
     root = Path(root).expanduser().resolve()
-    return tuple(
-        sorted(
-            (
-                path
-                for path in root.rglob("*")
-                if path.is_file() and path.suffix.casefold() == ".bnk"
-            ),
-            key=lambda path: path.relative_to(root).as_posix().casefold(),
+    if (
+        root.name == "en"
+        and root.parent.name == "Windows"
+        and root.parent.parent.name == "audios"
+        and root.parents[2].name in {"PersistentRoot", "Windows"}
+        and root.parents[3].name == "StreamingAssets"
+    ):
+        root = root.parents[3]
+    if root.name == "StreamingAssets":
+        directories = tuple(
+            root / folder / "audios" / "Windows" / "en"
+            for folder in ("PersistentRoot", "Windows")
+            if (root / folder / "audios" / "Windows" / "en").is_dir()
         )
-    )
+        if not directories:
+            raise Reverse1999IndexError(f"No English audio directories in {root}")
+        return root, directories
+    return root, (root,)
+
+
+def discover_bank_files(root):
+    root, directories = audio_bank_layout(root)
+    selected = {}
+    for directory in directories:
+        current = {}
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file() or path.suffix.casefold() != ".bnk":
+                continue
+            path.resolve().relative_to(directory.resolve())
+            directory.resolve().relative_to(root)
+            key = path.name.casefold()
+            if key in current:
+                raise Reverse1999IndexError(f"Duplicate bank filename in {directory}: {path.name}")
+            current[key] = path
+        # Downloaded PersistentRoot banks override the packaged Windows copy.
+        for key, path in current.items():
+            selected.setdefault(key, path)
+    return tuple(sorted(selected.values(), key=lambda path: path.relative_to(root).as_posix()))
+
+
+def bank_external_media_root(index, entry):
+    root = Path(index["game_audio_directory"]).expanduser().resolve()
+    relative = entry.get("media_directory")
+    if relative is None:
+        return root.parent / "Media"
+    if (
+        not isinstance(relative, str)
+        or not relative
+        or Path(relative).is_absolute()
+        or ".." in Path(relative).parts
+        or "\\" in relative
+    ):
+        raise Reverse1999IndexError("Unsafe bank external-media directory")
+    directory = (root / relative).resolve()
+    try:
+        directory.relative_to(root)
+    except ValueError as error:
+        raise Reverse1999IndexError("Bank external-media directory escapes audio root") from error
+    return directory
 
 
 def bank_index_staleness_reasons(index, game_audio_directory=None):
@@ -47,7 +97,10 @@ def bank_index_staleness_reasons(index, game_audio_directory=None):
     configured_root = index.get("game_audio_directory")
     if not isinstance(configured_root, str) or not configured_root:
         return ["bank index has no game audio directory"]
-    root = Path(game_audio_directory or configured_root).expanduser().resolve()
+    try:
+        root, _directories = audio_bank_layout(game_audio_directory or configured_root)
+    except (OSError, ValueError, Reverse1999IndexError) as error:
+        return [f"unable to locate installed audio: {error}"]
     if str(root) != str(Path(configured_root).expanduser().resolve()):
         return [f"game audio directory changed: {configured_root} -> {root}"]
     if not root.is_dir():
@@ -83,7 +136,7 @@ def bank_index_staleness_reasons(index, game_audio_directory=None):
         for path in discover_bank_files(root):
             stat = path.stat()
             current[path.relative_to(root).as_posix()] = (stat.st_size, stat.st_mtime_ns)
-    except OSError as error:
+    except (OSError, ValueError, Reverse1999IndexError) as error:
         return [f"unable to fingerprint installed banks: {error}"]
 
     added = sorted(set(current) - set(stored), key=str.casefold)
@@ -246,6 +299,7 @@ def build_bank_index(
     root = Path(game_audio_directory).expanduser().resolve()
     if not root.is_dir():
         raise Reverse1999IndexError(f"Game audio directory does not exist: {root}")
+    root, directories = audio_bank_layout(root)
     banks = discover_bank_files(root)
     if not banks:
         raise Reverse1999IndexError(f"No .bnk files found in {root}")
@@ -269,6 +323,9 @@ def build_bank_index(
             reused_count += 1
         else:
             entry = inspect_bank_entry(bank, root, inspector=inspector)
+        if root.name == "StreamingAssets":
+            source = next(directory for directory in directories if bank.is_relative_to(directory))
+            entry["media_directory"] = (source.parent / "Media").relative_to(root).as_posix()
         entries.append(entry)
         progress(current, len(banks), bank, reused)
 

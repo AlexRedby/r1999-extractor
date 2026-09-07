@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from r1999extractor.reverse1999_index import index_version
+from r1999extractor.reverse1999_index import bank_external_media_root, index_version
 from r1999extractor.wwise import WwiseBankError, extract_embedded_media
 
 audio_config_tables = {
@@ -104,8 +104,8 @@ class StoryAudioResolver:
                 f"rebuild it with r1999-bank-index (expected {index_version})"
             )
         self.registry = dict(registry)
+        self.bank_index = bank_index
         self.audio_root = Path(bank_index["game_audio_directory"]).expanduser().resolve()
-        self.external_media_root = self.audio_root.parent / "Media"
         self.banks = {}
         self._embedded_media = {}
         for entry in bank_index.get("banks", ()):
@@ -138,7 +138,7 @@ class StoryAudioResolver:
             )
         embedded_ids = set(bank.get("embedded_media_ids", ()))
         if media_id not in embedded_ids:
-            return media_id, self._read_external_media(media_id)
+            return media_id, self._read_external_media(media_id, bank)
         key = str(bank.get("path") or bank.get("filename") or "").strip()
         if not key:
             raise StoryAudioResolutionError(
@@ -179,8 +179,9 @@ class StoryAudioResolver:
             )
         return media_id, payload
 
-    def _read_external_media(self, media_id):
-        path = self._safe_installed_path(self.external_media_root, f"{media_id}.wem")
+    def _read_external_media(self, media_id, bank):
+        root = bank_external_media_root(self.bank_index, bank)
+        path = self._safe_installed_path(root, f"{media_id}.wem")
         before = path.stat()
         payload = path.read_bytes()
         after = path.stat()
@@ -254,10 +255,11 @@ class StoryAudioResolver:
             )
 
         embedded = set(bank.get("embedded_media_ids", ()))
+        external_root = bank_external_media_root(self.bank_index, bank)
         available = tuple(
             media_id
             for media_id in media_ids
-            if media_id in embedded or (self.external_media_root / f"{media_id}.wem").is_file()
+            if media_id in embedded or (external_root / f"{media_id}.wem").is_file()
         )
         if not available:
             return self._configured_unavailable(
