@@ -198,7 +198,7 @@ def decode_references(
     return decoded
 
 
-def decode_reference_data(data, output, media_id, decoder, *, bank=None):
+def decode_reference_data(data, output, media_id, decoder, *, bank=None, runner=None):
     """Decode one already-snapshotted Wwise media payload into a reference WAV."""
     if not isinstance(data, bytes) or not data:
         raise GameVoiceImportError(f"Media {media_id} contains no bytes")
@@ -214,6 +214,7 @@ def decode_reference_data(data, output, media_id, decoder, *, bank=None):
             decoded_output,
             decoder=decoder,
             overwrite=True,
+            **({"runner": runner} if runner is not None else {}),
         )
         trim_and_normalize_voice_reference(decoded_output, output)
     return ImportedReference(

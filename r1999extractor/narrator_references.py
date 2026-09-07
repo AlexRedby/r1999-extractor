@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 
+from vntts_artifacts.file_integrity import sha256_file
 from vntts_artifacts.voice_manifest import normalize_character_name, write_voice_manifest
 
 from r1999extractor.reverse1999_voice_import import decode_reference_data
@@ -64,81 +65,140 @@ def list_narrator_references(story_index, role):
     return tuple(line for _score, _id, line in sorted(candidates))
 
 
-def prepare_narrator_references(story_index, bank_index, role, output, *, line_id=None):
-    selected = list_narrator_references(story_index, role)
-    if line_id is not None:
-        selected = tuple(line for line in selected if line.line_id == line_id)
+def _fingerprint(path):
+    stat = Path(path).stat()
+    return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
+
+
+class NarratorReferenceSession:
+    """One character's validated catalog and bank snapshots, reused by a serial worker."""
+
+    def __init__(self, story_index, bank_index, role, output):
+        self.role = role
+        self.output = Path(output).expanduser().resolve()
+        self.inputs = {
+            Path(path): _fingerprint(path)
+            for path in (story_index, bank_index, Path(story_index).parent / "narrator-banks.json")
+        }
+        self.references = list_narrator_references(story_index, role)
+        self.index = json.loads(Path(bank_index).read_text(encoding="utf-8"))
+        self.snapshots = {}
+        self.resolver = StoryAudioResolver(
+            {
+                line.source_audio_id: AudioConfiguration(
+                    line.source_audio_id, line.source_event, line.source_bank, "narrator"
+                )
+                for line in self.references
+            },
+            self.index,
+        )
+        self._validate_inputs()
+
+    def _validate_inputs(self):
+        if any(_fingerprint(path) != fingerprint for path, fingerprint in self.inputs.items()):
+            raise StoryVoiceCandidateError(
+                "Narrator catalog changed. Reload the character references."
+            )
+
+    def prepare(self, *, line_id=None, decoder=None, runner=None):
+        self._validate_inputs()
+        selected = tuple(
+            line for line in self.references if line_id is None or line.line_id == line_id
+        )
         if not selected:
             raise StoryVoiceCandidateError("Selected narrator reference is no longer available")
-    index = json.loads(Path(bank_index).read_text(encoding="utf-8"))
-    snapshots = {
-        bank: snapshot_bank(index, bank) for bank in {line.source_bank for line in selected}
-    }
-    resolver = StoryAudioResolver(
-        {
-            line.source_audio_id: AudioConfiguration(
-                line.source_audio_id, line.source_event, line.source_bank, "narrator"
-            )
-            for line in selected
-        },
-        index,
-    )
-    payloads = []
-    for line in selected:
-        if (
-            snapshots[line.source_bank].routes.get(wwise_event_id(line.source_event))
-            != line.source_media_ids
-        ):
-            raise StoryVoiceCandidateError(f"Exact bank route changed for {line.line_id}")
-        resolution = resolver.resolve(line.source_audio_id)
-        if (
-            resolution.status != "installed"
-            or resolution.media_ids != line.source_media_ids
-            or resolution.bank != line.source_bank
-            or resolution.event != line.source_event
-        ):
-            raise StoryVoiceCandidateError(
-                f"Spoken audio is no longer available for {line.line_id}"
-            )
-        _media_id, payload = resolver.read_single_available_media(resolution)
-        payloads.append(payload)
-    identity = hashlib.sha256(
-        json.dumps(
-            [
-                (line.line_id, line.text_sha256, hashlib.sha256(payload).hexdigest())
-                for line, payload in zip(selected, payloads, strict=True)
-            ]
-        ).encode()
-    ).hexdigest()
-    directory = Path(output).expanduser().resolve() / f"narrator-spoken-v1-{identity}"
-    decoder = resolve_decoder("vgmstream-cli")
-    voices = []
-    for position, (line, payload) in enumerate(zip(selected, payloads, strict=True), 1):
-        reference = decode_reference_data(
-            payload,
-            directory / "references" / f"{position}.wav",
-            line.source_media_ids[0],
-            decoder,
-            bank=line.source_bank,
-        )
-        voices.append(
+        payloads = []
+        for line in selected:
+            bank = line.source_bank
+            if bank not in self.snapshots:
+                snapshot = snapshot_bank(self.index, bank)
+                self.snapshots[bank] = snapshot, _fingerprint(snapshot.path)
+            snapshot, fingerprint = self.snapshots[bank]
+            if _fingerprint(snapshot.path) != fingerprint:
+                raise StoryVoiceCandidateError(
+                    "Narrator audio bank changed. Reload the character references."
+                )
+            if snapshot.routes.get(wwise_event_id(line.source_event)) != line.source_media_ids:
+                raise StoryVoiceCandidateError(f"Exact bank route changed for {line.line_id}")
+            resolution = self.resolver.resolve(line.source_audio_id)
+            if (
+                resolution.status != "installed"
+                or resolution.media_ids != line.source_media_ids
+                or resolution.bank != bank
+                or resolution.event != line.source_event
+            ):
+                raise StoryVoiceCandidateError(
+                    f"Spoken audio is no longer available for {line.line_id}"
+                )
+            media_id = line.source_media_ids[0]
+            # Reuse the validated snapshot instead of reading/parsing this bank twice.
+            payload = snapshot.media.get(media_id)
+            if payload is None:
+                _media_id, payload = self.resolver.read_single_available_media(resolution)
+            payloads.append(payload)
+        identity = hashlib.sha256(
+            json.dumps(
+                [
+                    (line.line_id, line.text_sha256, hashlib.sha256(payload).hexdigest())
+                    for line, payload in zip(selected, payloads, strict=True)
+                ]
+            ).encode()
+        ).hexdigest()
+        directory = self.output / f"narrator-spoken-v1-{identity}"
+        directory.resolve().relative_to(self.output)
+        manifest = directory / "manifest.json"
+        voices = [
             {
-                "character": f"{role} spoken reference {position}",
+                "character": f"{self.role} spoken reference {position}",
                 "speaker": f"narrator-{identity}-{position}",
                 "aliases": [],
-                "references": [reference.path.relative_to(directory).as_posix()],
+                "references": [f"references/{position}.wav"],
                 "vntts.narrator_reference": {
                     "title": line.collection_title or f"Voice {line.source_audio_id}",
                     "text": line.text,
                     "line_id": line.line_id,
                     "bank": line.source_bank,
-                    "bank_sha256": snapshots[line.source_bank].sha256,
-                    "media_id": reference.media_id,
-                    "source_sha256": reference.source_sha256,
-                    "reference_sha256": reference.reference_sha256,
+                    "bank_sha256": self.snapshots[line.source_bank][0].sha256,
+                    "media_id": line.source_media_ids[0],
+                    "source_sha256": hashlib.sha256(payload).hexdigest(),
                 },
             }
-        )
-    manifest = directory / "manifest.json"
-    write_voice_manifest(manifest, {"version": 2, "voices": voices})
-    return manifest
+            for position, (line, payload) in enumerate(zip(selected, payloads, strict=True), 1)
+        ]
+        if _cached_audio_matches(manifest, voices):
+            return manifest
+        decoder = decoder or resolve_decoder("vgmstream-cli")
+        for voice, line, payload in zip(voices, selected, payloads, strict=True):
+            destination = directory / voice["references"][0]
+            destination.resolve().relative_to(directory.resolve())
+            if destination.is_symlink():
+                raise StoryVoiceCandidateError("Cached narrator reference must not be a symlink")
+            reference = decode_reference_data(
+                payload,
+                destination,
+                line.source_media_ids[0],
+                decoder,
+                bank=line.source_bank,
+                **({"runner": runner} if runner is not None else {}),
+            )
+            voice["vntts.narrator_reference"]["reference_sha256"] = reference.reference_sha256
+        write_voice_manifest(manifest, {"version": 2, "voices": voices})
+        return manifest
+
+
+def _cached_audio_matches(manifest, expected):
+    try:
+        saved = json.loads(manifest.read_text(encoding="utf-8"))
+        for voice in saved["voices"]:
+            digest = voice["vntts.narrator_reference"].pop("reference_sha256")
+            reference = manifest.parent / voice["references"][0]
+            reference.resolve().relative_to(manifest.parent.resolve())
+            if reference.is_symlink() or sha256_file(reference) != digest:
+                return False
+        return saved == {"version": 2, "voices": expected}
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+        return False
+
+
+def prepare_narrator_references(story_index, bank_index, role, output, *, line_id=None):
+    return NarratorReferenceSession(story_index, bank_index, role, output).prepare(line_id=line_id)

@@ -5,16 +5,80 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from r1999extractor.narrator_references import list_narrator_references, prepare_narrator_references
+from r1999extractor.narrator_references import (
+    NarratorReferenceSession,
+    list_narrator_references,
+    prepare_narrator_references,
+)
 from r1999extractor.reverse1999_index import build_bank_index
 from r1999extractor.reverse1999_voice_import import ImportedReference
 from r1999extractor.story_audio import wwise_event_id
-from r1999extractor.story_voice_candidates import StoryVoiceCandidateError
+from r1999extractor.story_voice_candidates import StoryVoiceCandidateError, snapshot_bank
 from tests.test_playable_voice import synthetic_bank
 from tests.test_story_voice_candidates import story_line, write_story
 
 
 class NarratorReferencesTest(unittest.TestCase):
+    def test_session_reuses_catalog_bank_and_verified_disk_audio(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            story, index, _lines = self.fixture(root)
+
+            def decode_one(payload, output, media_id, _decoder, *, bank):
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"decoded")
+                return ImportedReference(
+                    output,
+                    media_id,
+                    hashlib.sha256(payload).hexdigest(),
+                    hashlib.sha256(b"decoded").hexdigest(),
+                    bank,
+                )
+
+            with (
+                patch(
+                    "r1999extractor.narrator_references.list_narrator_references",
+                    wraps=list_narrator_references,
+                ) as listing,
+                patch(
+                    "r1999extractor.narrator_references.snapshot_bank", wraps=snapshot_bank
+                ) as snapshot,
+                patch(
+                    "r1999extractor.narrator_references.decode_reference_data",
+                    side_effect=decode_one,
+                ) as decode,
+                patch(
+                    "r1999extractor.narrator_references.StoryAudioResolver.read_single_available_media"
+                ) as reread,
+            ):
+                session = NarratorReferenceSession(story, index, "Centurion", root / "candidates")
+                manifest = session.prepare(decoder="decoder")
+                session.prepare(decoder="decoder")
+                listing.assert_called_once()
+                snapshot.assert_called_once()
+                decode.assert_called_once()
+                reread.assert_not_called()
+                # Reopening revalidates source data but reuses verified decoded audio.
+                reopened = NarratorReferenceSession(story, index, "Centurion", root / "candidates")
+                self.assertEqual(reopened.prepare(decoder="decoder"), manifest)
+                decode.assert_called_once()
+                wav = manifest.parent / "references/1.wav"
+                wav.write_bytes(b"corrupt")
+                reopened.prepare(decoder="decoder")
+                self.assertEqual(decode.call_count, 2)
+                self.assertEqual(wav.read_bytes(), b"decoded")
+                manifest.write_text('{"version":2,"voices":[{"vntts.narrator_reference":null}]}')
+                reopened.prepare(decoder="decoder")
+                self.assertEqual(decode.call_count, 3)
+                bank = root / "en/mianvoc_hero3032.bnk"
+                bank.write_bytes(bank.read_bytes() + b"changed")
+                with self.assertRaisesRegex(StoryVoiceCandidateError, "bank changed"):
+                    session.prepare(decoder="decoder")
+                with story.open("a") as stream:
+                    stream.write("\n")
+                with self.assertRaisesRegex(StoryVoiceCandidateError, "catalog changed"):
+                    reopened.prepare(decoder="decoder")
+
     def test_lists_all_speech_without_decoding_and_prepares_only_selected_line(self):
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve()
