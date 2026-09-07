@@ -17,7 +17,8 @@ from r1999extractor.story_voice_candidates import (
 from r1999extractor.wwise import resolve_decoder
 
 
-def prepare_narrator_references(story_index, bank_index, role, output):
+def list_narrator_references(story_index, role):
+    """Rank all suitable transcripts without reading or decoding audio payloads."""
     missing = (
         f"No suitable installed spoken references for {role}. "
         "Check that English character voice audio is installed, then find game voices again. "
@@ -60,7 +61,15 @@ def prepare_narrator_references(story_index, bank_index, role, output):
         candidates.append((abs(len(words) - 20), line.line_id, line))
     if not candidates:
         raise StoryVoiceCandidateError(missing)
-    selected = [line for _score, _id, line in sorted(candidates)[:3]]
+    return tuple(line for _score, _id, line in sorted(candidates))
+
+
+def prepare_narrator_references(story_index, bank_index, role, output, *, line_id=None):
+    selected = list_narrator_references(story_index, role)
+    if line_id is not None:
+        selected = tuple(line for line in selected if line.line_id == line_id)
+        if not selected:
+            raise StoryVoiceCandidateError("Selected narrator reference is no longer available")
     index = json.loads(Path(bank_index).read_text(encoding="utf-8"))
     snapshots = {
         bank: snapshot_bank(index, bank) for bank in {line.source_bank for line in selected}

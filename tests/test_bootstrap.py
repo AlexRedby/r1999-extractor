@@ -78,10 +78,14 @@ class BootstrapTest(unittest.TestCase):
                 return_value=root / "manifest.json",
             ) as prepare:
                 prepare_player_voice_candidates(
-                    roles=("Centurion",), data_directory=root, narrator=True
+                    roles=("Centurion",),
+                    data_directory=root,
+                    narrator=True,
+                    narrator_line_id=lines[0].line_id,
                 )
             self.assertEqual(prepare.call_args.args[0], result["narrator_index"])
             self.assertEqual(prepare.call_args.args[2], "Centurion")
+            self.assertEqual(prepare.call_args.kwargs["line_id"], lines[0].line_id)
             self.assertEqual(lines[0].collection_title, "First Encounter")
 
     def test_requires_discoverable_installed_inputs(self):

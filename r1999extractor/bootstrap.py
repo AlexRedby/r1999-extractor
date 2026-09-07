@@ -56,7 +56,9 @@ class BootstrapError(RuntimeError):
     pass
 
 
-def prepare_player_voice_candidates(*, roles, data_directory=None, narrator=False):
+def prepare_player_voice_candidates(
+    *, roles, data_directory=None, narrator=False, narrator_line_id=None
+):
     """Build or reuse safe, selected-role candidates for the player workflow."""
     roles = tuple(
         sorted(
@@ -78,7 +80,11 @@ def prepare_player_voice_candidates(*, roles, data_directory=None, narrator=Fals
             raise BootstrapError("Choose one narrator character at a time")
         try:
             return prepare_narrator_references(
-                story_index, bank_index, roles[0], output / "voice-candidates"
+                story_index,
+                bank_index,
+                roles[0],
+                output / "voice-candidates",
+                line_id=narrator_line_id,
             )
         except (OSError, RuntimeError, ValueError) as error:
             raise BootstrapError(f"Unable to prepare narrator speech: {error}") from error
@@ -402,6 +408,7 @@ def create_parser():
     parser.add_argument("--game-version", default="installed")
     parser.add_argument("--prepare-voice-candidates-only", action="store_true")
     parser.add_argument("--narrator", action="store_true")
+    parser.add_argument("--narrator-line-id")
     parser.add_argument("--voice-candidate-role", action="append", default=[])
     return parser
 
@@ -414,6 +421,7 @@ def main(arguments=None):
                 roles=options.voice_candidate_role,
                 data_directory=options.data_directory,
                 narrator=options.narrator,
+                narrator_line_id=options.narrator_line_id,
             )
             print(json.dumps({"voice_manifest": str(manifest)}, sort_keys=True))
             return 0

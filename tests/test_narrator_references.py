@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from r1999extractor.narrator_references import prepare_narrator_references
+from r1999extractor.narrator_references import list_narrator_references, prepare_narrator_references
 from r1999extractor.reverse1999_index import build_bank_index
 from r1999extractor.reverse1999_voice_import import ImportedReference
 from r1999extractor.story_audio import wwise_event_id
@@ -15,6 +15,73 @@ from tests.test_story_voice_candidates import story_line, write_story
 
 
 class NarratorReferencesTest(unittest.TestCase):
+    def test_lists_all_speech_without_decoding_and_prepares_only_selected_line(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            story, index, lines = self.fixture(root)
+            for number in range(4, 8):
+                bank = f"mianvoc_hero3032_{number}.bnk"
+                (root / "en" / bank).write_bytes(
+                    synthetic_bank(
+                        10, f"speech {number}".encode(), wwise_event_id("play_hero_line")
+                    )
+                )
+                line = story_line(
+                    number, "This is another spoken reference with enough words for narration."
+                )
+                line.update(
+                    line_id=f"playable-voice:3032:{number}:0",
+                    speaker="Centurion",
+                    voice_character="Centurion",
+                    source_bank=bank,
+                )
+                lines.append(line)
+            write_story(story, lines)
+            build_bank_index(root / "en", output=index)
+            with (
+                patch("r1999extractor.narrator_references.resolve_decoder") as decoder,
+                patch("r1999extractor.narrator_references.snapshot_bank") as snapshot,
+                patch("r1999extractor.narrator_references.decode_reference_data") as decode,
+            ):
+                candidates = list_narrator_references(story, "Centurion")
+                self.assertEqual(len(candidates), 5)
+                self.assertEqual(candidates[0].line_id, lines[0]["line_id"])
+                decoder.assert_not_called()
+                snapshot.assert_not_called()
+                decode.assert_not_called()
+                with self.assertRaisesRegex(StoryVoiceCandidateError, "no longer available"):
+                    prepare_narrator_references(story, index, "Centurion", root, line_id="missing")
+                decode.assert_not_called()
+
+            def decode_one(payload, output, media_id, _decoder, *, bank):
+                self.assertEqual(payload, b"speech 7")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"decoded")
+                return ImportedReference(
+                    output,
+                    media_id,
+                    hashlib.sha256(payload).hexdigest(),
+                    hashlib.sha256(b"decoded").hexdigest(),
+                    bank,
+                )
+
+            with (
+                patch("r1999extractor.narrator_references.resolve_decoder"),
+                patch(
+                    "r1999extractor.narrator_references.decode_reference_data",
+                    side_effect=decode_one,
+                ) as decode,
+            ):
+                manifest = prepare_narrator_references(
+                    story, index, "Centurion", root, line_id="playable-voice:3032:7:0"
+                )
+                decode.assert_called_once()
+                voices = json.loads(manifest.read_text())["voices"]
+                self.assertEqual(len(voices), 1)
+                self.assertEqual(
+                    voices[0]["vntts.narrator_reference"]["line_id"], "playable-voice:3032:7:0"
+                )
+
     def fixture(self, root, *, external=False):
         audio = root / "en"
         audio.mkdir()
