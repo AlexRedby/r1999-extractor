@@ -12,6 +12,7 @@ from vntts_artifacts.voice_manifest import (
 )
 
 from r1999extractor.cli import cli_error
+from r1999extractor.narrator_references import prepare_narrator_references
 from r1999extractor.playable_voice import extract_playable_voice_lines
 from r1999extractor.reverse1999_catalog import (
     _load_overlay,
@@ -26,9 +27,7 @@ from r1999extractor.reverse1999_config import (
 )
 from r1999extractor.reverse1999_index import build_bank_index
 from r1999extractor.reverse1999_voice_import import (
-    decode_reference_data,
     find_game_audio_directory,
-    update_manifest,
 )
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.story_audio import StoryAudioResolver, build_audio_registry
@@ -45,10 +44,8 @@ from r1999extractor.story_voice_candidates import (
     REPORT_SCHEMA,
     SUPPORTED_REPORT_VERSIONS,
     build_story_voice_candidates,
-    snapshot_bank,
 )
 from r1999extractor.structured_story import audit_story_like_tables
-from r1999extractor.wwise import resolve_decoder
 
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
@@ -76,31 +73,15 @@ def prepare_player_voice_candidates(*, roles, data_directory=None, narrator=Fals
     bank_index = output / "english-bank-index.json"
     if not story_index.is_file() or not bank_index.is_file():
         raise BootstrapError("Import the installed game before preparing character voices")
-    if narrator and len(roles) == 1:
-        catalog = json.loads((output / "narrator-banks.json").read_text(encoding="utf-8"))
-        bank = catalog.get(roles[0])
-        if bank:
-            snapshot = snapshot_bank(json.loads(bank_index.read_text(encoding="utf-8")), bank)
-            directory = output / "voice-candidates" / f"narrator-{snapshot.sha256}"
-            decoder = resolve_decoder("vgmstream-cli")
-            # The character-specific bank has no bound transcript; audition its largest clips.
-            selected = sorted(
-                snapshot.media, key=lambda mid: len(snapshot.media[mid]), reverse=True
-            )[:3]
-            if not selected:
-                raise BootstrapError(f"No embedded voice clips in {bank}")
-            for media_id in selected:
-                reference = decode_reference_data(
-                    snapshot.media[media_id],
-                    directory / "references" / f"{media_id}.wav",
-                    media_id,
-                    decoder,
-                    bank=bank,
-                )
-                manifest = update_manifest(
-                    directory, f"{roles[0]} clip {media_id}", [reference], snapshot.path
-                )
-            return manifest
+    if narrator:
+        if len(roles) != 1:
+            raise BootstrapError("Choose one narrator character at a time")
+        try:
+            return prepare_narrator_references(
+                story_index, bank_index, roles[0], output / "voice-candidates"
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            raise BootstrapError(f"Unable to prepare narrator speech: {error}") from error
     story_sha256 = sha256_file(story_index)
     identity = hashlib.sha256(
         json.dumps(
@@ -387,6 +368,7 @@ def bootstrap_local_artifacts(
                     source_media_ids=voice.source_media_ids,
                     available_media_ids=voice.available_media_ids,
                     source_kind=voice.source_kind,
+                    collection_title=voice.title,
                 )
             )
     narrator_path = write_story_index(

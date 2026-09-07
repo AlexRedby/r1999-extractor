@@ -3,7 +3,6 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from r1999extractor.bootstrap import (
@@ -53,7 +52,7 @@ class BootstrapTest(unittest.TestCase):
             with (
                 patch(
                     "r1999extractor.bootstrap.load_config_directory",
-                    return_value=({"centurion": "Centurion"}, tables),
+                    return_value=({"centurion": "Centurion", "first": "First Encounter"}, tables),
                 ),
                 patch(
                     "r1999extractor.bootstrap.build_bank_index",
@@ -74,35 +73,16 @@ class BootstrapTest(unittest.TestCase):
             self.assertEqual(lines[0].source_media_ids, (42,))
             self.assertEqual(result["story_line_count"], 0)
             (root / "reverse1999" / "english-bank-index.json").write_text("{}")
-            snapshot = SimpleNamespace(
-                sha256="a" * 64, media={7: b"voice"}, path=root / "hero3141_mainstory.bnk"
-            )
-            with (
-                patch("r1999extractor.bootstrap.snapshot_bank", return_value=snapshot) as bank,
-                patch("r1999extractor.bootstrap.resolve_decoder", return_value="decoder"),
-                patch("r1999extractor.bootstrap.decode_reference_data") as decode,
-                patch(
-                    "r1999extractor.bootstrap.update_manifest", return_value=root / "manifest.json"
-                ),
-            ):
+            with patch(
+                "r1999extractor.bootstrap.prepare_narrator_references",
+                return_value=root / "manifest.json",
+            ) as prepare:
                 prepare_player_voice_candidates(
                     roles=("Centurion",), data_directory=root, narrator=True
                 )
-            self.assertEqual(bank.call_args.args[1], "hero3141_mainstory.bnk")
-            self.assertEqual(decode.call_args.args[0], b"voice")
-            (root / "reverse1999" / "narrator-banks.json").write_text("{}")
-            with (
-                patch(
-                    "r1999extractor.bootstrap.build_story_voice_candidates",
-                    return_value=(root / "report.json", {}),
-                ) as build,
-                patch("r1999extractor.bootstrap._publish_player_voice_manifest") as publish,
-            ):
-                prepare_player_voice_candidates(
-                    roles=("Centurion",), data_directory=root, narrator=True
-                )
-            self.assertEqual(build.call_args.args[0], result["narrator_index"])
-            self.assertEqual(publish.call_args.args[3], result["narrator_index"])
+            self.assertEqual(prepare.call_args.args[0], result["narrator_index"])
+            self.assertEqual(prepare.call_args.args[2], "Centurion")
+            self.assertEqual(lines[0].collection_title, "First Encounter")
 
     def test_requires_discoverable_installed_inputs(self):
         with (
