@@ -43,6 +43,7 @@ from r1999extractor.reverse1999_audition import (
     save_speaker_mapping,
     voice_coverage,
 )
+from r1999extractor.reverse1999_index import bank_source_path
 from r1999extractor.reverse1999_voice_import import (
     ImportedReference,
     default_output,
@@ -504,7 +505,7 @@ class Reverse1999AuditionDialog(QDialog):
             self.status.setText("Choose a bank and media clip first.")
             return
         self._clip_dependency_changed()
-        root = Path(self.bank_index["game_audio_directory"])
+        entry = next(entry for entry in self.bank_index["banks"] if entry["path"] == candidate.path)
         request = _PreparationRequest(candidate, int(media_id), Event())
         self._preparation_request = request
         self._set_preparation_busy(True)
@@ -512,7 +513,7 @@ class Reverse1999AuditionDialog(QDialog):
         self.preparation_runner.start(
             self._prepare_clip,
             request,
-            root / candidate.path,
+            bank_source_path(self.bank_index, entry),
             self.clip_preparer,
             self.quality_analyzer,
         )

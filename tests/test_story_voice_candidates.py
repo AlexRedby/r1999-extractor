@@ -63,7 +63,7 @@ def write_bank_index(path, audio_root):
     path.write_text(
         json.dumps(
             {
-                "version": 4,
+                "version": 5,
                 "game_audio_directory": str(audio_root),
                 "bank_count": 1,
                 "banks": [

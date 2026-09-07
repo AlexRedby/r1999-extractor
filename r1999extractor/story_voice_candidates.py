@@ -22,6 +22,7 @@ from r1999extractor.playable_voice import (
     resolve_story_index_path,
     validate_bank_index_document,
 )
+from r1999extractor.reverse1999_index import Reverse1999IndexError, bank_source_path
 from r1999extractor.reverse1999_index import default_output as default_bank_index
 from r1999extractor.reverse1999_voice_import import (
     GameVoiceImportError,
@@ -245,15 +246,10 @@ def snapshot_bank(bank_index, filename):
     entry = entries.get(filename.casefold())
     if entry is None:
         raise StoryVoiceCandidateError(f"Story bank is absent from the index: {filename}")
-    audio_root = Path(bank_index["game_audio_directory"]).expanduser().resolve()
-    relative = Path(entry["path"])
-    path = (audio_root / relative).resolve()
     try:
-        path.relative_to(audio_root)
-    except ValueError as error:
-        raise StoryVoiceCandidateError(
-            f"Story bank path escapes the indexed audio root: {entry['path']}"
-        ) from error
+        path = bank_source_path(bank_index, entry)
+    except Reverse1999IndexError as error:
+        raise StoryVoiceCandidateError(str(error)) from error
     if path.name != entry["filename"]:
         raise StoryVoiceCandidateError(
             f"Story bank filename/path mismatch: {entry['filename']} != {entry['path']}"

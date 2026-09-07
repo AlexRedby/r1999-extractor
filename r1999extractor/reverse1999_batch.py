@@ -28,7 +28,7 @@ from r1999extractor.reverse1999_config import (
     write_dialogue_index,
 )
 from r1999extractor.reverse1999_config import default_output as default_dialogue_index
-from r1999extractor.reverse1999_index import build_bank_index
+from r1999extractor.reverse1999_index import bank_source_path, build_bank_index
 from r1999extractor.reverse1999_index import default_output as default_bank_index
 from r1999extractor.reverse1999_voice_import import (
     ImportedReference,
@@ -354,7 +354,6 @@ def extract_mapped_clips(
     checkpoint=None,
 ):
     bank_index = _load_json(state["bank_index"], "Bank index")
-    root = Path(bank_index["game_audio_directory"])
     entries = _bank_entries(bank_index)
     decoder = resolve_decoder(decoder)
     cache_directory = Path(cache_directory).expanduser().resolve()
@@ -365,7 +364,7 @@ def extract_mapped_clips(
             entry = entries.get(configured_bank.casefold())
             if entry is None:
                 continue
-            bank = root / entry["path"]
+            bank = bank_source_path(bank_index, entry)
             try:
                 media = read_embedded_media(bank)
                 with TemporaryDirectory(prefix="r1999-batch-") as temporary_directory:

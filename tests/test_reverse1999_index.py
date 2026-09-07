@@ -5,7 +5,10 @@ from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from r1999extractor.reverse1999_index import (
+    Reverse1999IndexError,
+    bank_external_media_root,
     bank_index_staleness_reasons,
+    bank_source_path,
     build_bank_index,
     classify_bank,
     main,
@@ -19,6 +22,46 @@ from r1999extractor.wwise import (
 
 
 class Reverse1999BankIndexTest(unittest.TestCase):
+    def test_macos_base_and_downloaded_banks_share_safe_overlay_and_refresh(self):
+        from r1999extractor.story_voice_candidates import snapshot_bank
+        from tests.test_playable_voice import synthetic_bank
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            downloaded = root / "Documents/ResLib/iOS/audios/iOS/en"
+            packaged = root / "Game.app/Data/Raw/iOS"
+            base = packaged / "audios/iOS/en"
+            downloaded.mkdir(parents=True)
+            base.mkdir(parents=True)
+            payload = synthetic_bank(10, b"original", 40)
+            (base / "mianvoc_hero3032.bnk").write_bytes(payload)
+            (base / "story.bnk").write_bytes(payload)
+            (downloaded / "story.bnk").write_bytes(synthetic_bank(10, b"updated!", 40))
+            with patch(
+                "r1999extractor.reverse1999_index.packaged_macos_resource_roots",
+                return_value=(packaged,),
+            ):
+                output = root / "index.json"
+                index, _ = build_bank_index(downloaded, output=output)
+                self.assertEqual(index["bank_count"], 2)
+                entries = {entry["filename"]: entry for entry in index["banks"]}
+                centurion = entries["mianvoc_hero3032.bnk"]
+                self.assertEqual(bank_source_path(index, centurion), base / centurion["filename"])
+                self.assertEqual(bank_external_media_root(index, centurion), base.parent / "Media")
+                self.assertEqual(snapshot_bank(index, centurion["filename"]).media[10], b"original")
+                self.assertEqual(snapshot_bank(index, "story.bnk").media[10], b"updated!")
+                self.assertEqual(bank_index_staleness_reasons(index), [])
+                reused, _ = build_bank_index(downloaded, output=output)
+                self.assertEqual(reused["reused_count"], 2)
+                for invalid in ({"source_directory": str(root)}, {"path": "../outside.bnk"}):
+                    with self.assertRaises(Reverse1999IndexError):
+                        bank_source_path(index, centurion | invalid)
+                (downloaded / "story.bnk").unlink()
+                self.assertTrue(bank_index_staleness_reasons(index))
+                refreshed, _ = build_bank_index(downloaded, output=output)
+                self.assertEqual(refreshed["reused_count"], 1)
+                self.assertEqual(snapshot_bank(refreshed, "story.bnk").media[10], b"original")
+
     def test_detects_new_changed_and_removed_bank_inputs(self):
         summary = WwiseBankSummary(154, ("BKHD",), (), 0, None)
         with TemporaryDirectory() as temporary_directory:

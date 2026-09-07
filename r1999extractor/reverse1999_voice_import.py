@@ -142,7 +142,17 @@ def resolve_bank(
             raise GameVoiceImportError(
                 "Unable to find Reverse: 1999 game audio; pass --game-audio-directory"
             )
-        bank = Path(game_audio_directory).expanduser().resolve() / filename
+        # Imported here because the indexer also uses this module's discovery.
+        from r1999extractor.reverse1999_index import discover_bank_files
+
+        bank = next(
+            (
+                path
+                for path in discover_bank_files(game_audio_directory)
+                if path.name.casefold() == filename.casefold()
+            ),
+            Path(game_audio_directory).expanduser().resolve() / filename,
+        )
 
     if not bank.is_file():
         raise GameVoiceImportError(f"Voice bank does not exist: {bank}")

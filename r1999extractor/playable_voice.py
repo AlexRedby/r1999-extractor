@@ -17,7 +17,9 @@ from r1999extractor.reverse1999_config import (
     load_config_directory,
 )
 from r1999extractor.reverse1999_index import (
+    Reverse1999IndexError,
     bank_external_media_root,
+    bank_source_path,
 )
 from r1999extractor.reverse1999_index import (
     default_output as default_bank_index,
@@ -315,7 +317,6 @@ def _bank_entries(bank_index):
 
 def bind_playable_voice_provenance(lines, bank_index):
     validate_bank_index_document(bank_index)
-    audio_root = Path(bank_index["game_audio_directory"]).expanduser().resolve()
     entries = _bank_entries(bank_index)
     banks = {}
     bound = []
@@ -335,13 +336,10 @@ def bind_playable_voice_provenance(lines, bank_index):
             relative = entry.get("path") or entry.get("filename")
             if not isinstance(relative, str) or not relative:
                 raise PlayableVoiceError(f"Voice bank index has no path: {line.source_bank}")
-            bank_path = (audio_root / relative).resolve()
             try:
-                bank_path.relative_to(audio_root)
-            except ValueError as error:
-                raise PlayableVoiceError(
-                    f"Voice bank path escapes audio root: {relative}"
-                ) from error
+                bank_path = bank_source_path(bank_index, entry)
+            except Reverse1999IndexError as error:
+                raise PlayableVoiceError(str(error)) from error
             before = bank_path.stat()
             bank_data = bank_path.read_bytes()
             after = bank_path.stat()

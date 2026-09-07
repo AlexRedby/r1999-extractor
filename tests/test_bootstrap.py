@@ -32,7 +32,7 @@ class BootstrapTest(unittest.TestCase):
             "json_story_audio_role": [[1314101, "play_hero3141_mainvoc_1", "hero3141_mainvoc"]],
         }
         bank_index = {
-            "version": 4,
+            "version": 5,
             "game_audio_directory": "/game/en",
             "banks": [
                 {
@@ -104,7 +104,7 @@ class BootstrapTest(unittest.TestCase):
             config.mkdir()
             audio.mkdir()
             bundle.write_bytes(b"synthetic")
-            bank_index = {"version": 4, "game_audio_directory": str(audio), "banks": []}
+            bank_index = {"version": 5, "game_audio_directory": str(audio), "banks": []}
             progress = []
             with (
                 patch("r1999extractor.bootstrap.load_config_directory", return_value=({}, {})),

@@ -3,7 +3,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from r1999extractor.reverse1999_index import bank_external_media_root, index_version
+from r1999extractor.reverse1999_index import (
+    Reverse1999IndexError,
+    bank_external_media_root,
+    bank_source_path,
+    index_version,
+)
 from r1999extractor.wwise import WwiseBankError, extract_embedded_media
 
 audio_config_tables = {
@@ -105,7 +110,6 @@ class StoryAudioResolver:
             )
         self.registry = dict(registry)
         self.bank_index = bank_index
-        self.audio_root = Path(bank_index["game_audio_directory"]).expanduser().resolve()
         self.banks = {}
         self._embedded_media = {}
         for entry in bank_index.get("banks", ()):
@@ -145,7 +149,10 @@ class StoryAudioResolver:
                 f"Installed bank {resolution.bank!r} has no safe source path"
             )
         if key not in self._embedded_media:
-            bank_path = self._safe_installed_path(self.audio_root, key)
+            try:
+                bank_path = bank_source_path(self.bank_index, bank)
+            except Reverse1999IndexError as error:
+                raise StoryAudioResolutionError(str(error)) from error
             before = bank_path.stat()
             expected_size = bank.get("size")
             expected_mtime = bank.get("mtime_ns")

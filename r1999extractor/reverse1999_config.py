@@ -107,6 +107,19 @@ def parse_data_document(document):
     return tables
 
 
+def packaged_macos_resource_roots(home=None):
+    home = Path.home() if home is None else Path(home)
+    return tuple(
+        root
+        for applications in (home / "Applications", Path("/Applications"))
+        for root in (
+            applications / "Reverse: 1999.app/Wrapper/Reverse1999.app/Data/Raw/iOS",
+            applications / "Reverse: 1999.app/Data/Raw/iOS",
+        )
+        if root.is_dir()
+    )
+
+
 def game_resource_roots(home=None, environment=None):
     """Return known installed platform roots without scanning whole drives."""
     home = Path.home() if home is None else Path(home)
@@ -160,6 +173,7 @@ def game_resource_roots(home=None, environment=None):
                 )
     for streaming_root in streaming_roots:
         candidates.extend((streaming_root / "PersistentRoot", streaming_root / "Windows"))
+    candidates.extend(packaged_macos_resource_roots(home))
 
     unique = []
     seen = set()

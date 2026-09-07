@@ -35,7 +35,12 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
         self.assertEqual(found, audio.resolve())
 
     def test_ignores_windows_audio_directory_without_banks(self):
-        with TemporaryDirectory() as temporary_directory:
+        with (
+            TemporaryDirectory() as temporary_directory,
+            patch(
+                "r1999extractor.reverse1999_config.packaged_macos_resource_roots", return_value=()
+            ),
+        ):
             local_app_data = Path(temporary_directory) / "LocalAppData"
             audio = local_app_data / "Game" / "ResLib/Windows/audios/Windows/en"
             audio.mkdir(parents=True)
@@ -46,6 +51,17 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
             )
 
         self.assertIsNone(found)
+
+    def test_finds_packaged_macos_audio_when_no_downloads_exist(self):
+        with TemporaryDirectory() as directory:
+            home = Path(directory)
+            packaged = home / "Applications/Reverse: 1999.app/Wrapper/Reverse1999.app/Data/Raw/iOS"
+            audio = packaged / "audios/iOS/en"
+            audio.mkdir(parents=True)
+            (audio / "mianvoc_hero3032.bnk").write_bytes(b"bank")
+            self.assertEqual(
+                importer.find_game_audio_directory(home=home, environment={}), audio.resolve()
+            )
 
     def test_selects_longest_embedded_media_as_voice_references(self):
         first = b"RIFF-first"
