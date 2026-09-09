@@ -48,9 +48,7 @@ def extract_story_portraits(
     attempted = set()
     missing = set(requested)
 
-    cached_bundles = {
-        sources[filename] for filename in requested if filename in sources
-    }
+    cached_bundles = {sources[filename] for filename in requested if filename in sources}
     for bundle_name in sorted(cached_bundles):
         bundle = bundle_directory / bundle_name
         found = _portraits_from_bundle(bundle, missing, loader)
