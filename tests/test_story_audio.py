@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -30,6 +31,57 @@ def bank_index(root, *, event="play_voice_7", include_event=True, embedded=(99,)
 
 
 class StoryAudioTest(unittest.TestCase):
+    def test_streamed_media_never_uses_same_id_embedded_prefetch(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "en"
+            root.mkdir()
+            index = bank_index(root)
+            index["banks"][0]["events"][0]["streamed_media_ids"] = [99]
+            resolver = StoryAudioResolver(
+                build_audio_registry({"json_role_audio": [[7, "play_voice_7", "voice_bank"]]}),
+                index,
+            )
+            self.assertEqual(resolver.resolve("7").status, "configured_unavailable")
+            external = root.parent / "Media" / "99.wem"
+            external.parent.mkdir()
+            external.write_bytes(b"full streamed recording")
+            resolution = resolver.resolve("7")
+            self.assertEqual(resolution.streamed_media_ids, (99,))
+            self.assertEqual(
+                resolver.read_media(resolution, 99, embedded_media={99: b"short prefetch"}),
+                b"full streamed recording",
+            )
+            self.assertEqual(
+                resolver.read_single_available_media(resolution), (99, b"full streamed recording")
+            )
+            # Source-duration probes reconstruct this from a story index which
+            # deliberately does not serialize Wwise source layout.
+            self.assertEqual(
+                resolver.read_single_available_media(replace(resolution, streamed_media_ids=())),
+                (99, b"full streamed recording"),
+            )
+            external.unlink()
+            with self.assertRaisesRegex(StoryAudioResolutionError, "missing"):
+                resolver.read_media(resolution, 99, embedded_media={99: b"short prefetch"})
+
+    def test_embedded_source_does_not_switch_to_unrelated_external_duplicate(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "en"
+            root.mkdir()
+            external = root.parent / "Media" / "99.wem"
+            external.parent.mkdir()
+            external.write_bytes(b"unrelated duplicate")
+            resolver = StoryAudioResolver(
+                build_audio_registry({"json_role_audio": [[7, "play_voice_7", "voice_bank"]]}),
+                bank_index(root),
+            )
+            self.assertEqual(
+                resolver.read_media(
+                    resolver.resolve("7"), 99, embedded_media={99: b"full embedded"}
+                ),
+                b"full embedded",
+            )
+
     def test_normalizes_decorated_cue_ids_and_uses_wwise_fnv1(self):
         self.assertEqual(normalize_audio_id("610021279#1.5|1.5"), "610021279")
         self.assertEqual(normalize_audio_id("612001194&1111111"), "612001194")

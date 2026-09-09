@@ -5,12 +5,13 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from r1999extractor.reverse1999_audition import (
     candidate_banks,
     chapter_tokens,
     filter_dialogue,
+    prepare_audition_clip,
     save_speaker_mapping,
     voice_coverage,
 )
@@ -53,6 +54,35 @@ class Reverse1999AuditionTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.application = None if ui_unavailable else QApplication.instance() or QApplication([])
+
+    def test_prefetch_audition_cache_uses_full_external_wem_hash(self):
+        from tests.test_playable_voice import synthetic_bank
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            bank = root / "en/voice.bnk"
+            bank.parent.mkdir()
+            bank.write_bytes(synthetic_bank(42, b"short", 1, stream_type=1))
+            external = root / "Media/42.wem"
+            external.parent.mkdir()
+            external.write_bytes(b"full external")
+            legacy = root / "cache/voice/42.wav"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_bytes(b"old short cache")
+            decoded = []
+
+            def convert(source, destination, **_options):
+                decoded.append(Path(source).read_bytes())
+                Path(destination).write_bytes(b"wav")
+
+            with patch("r1999extractor.reverse1999_audition.convert_audio", side_effect=convert):
+                clip = prepare_audition_clip(
+                    bank, 42, decoder="decoder", cache_directory=root / "cache"
+                )
+
+        self.assertEqual(decoded, [b"full external"])
+        self.assertIn(hashlib.sha256(b"full external").hexdigest()[:12], clip.name)
+        self.assertNotEqual(clip, legacy)
 
     def setUp(self):
         if self.application is not None:

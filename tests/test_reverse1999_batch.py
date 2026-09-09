@@ -3,10 +3,12 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from r1999extractor.reverse1999_batch import (
     Reverse1999BatchError,
     discover_auto_mappings,
+    extract_mapped_clips,
     load_state,
     map_speakers,
     merge_clip_reviews,
@@ -20,6 +22,70 @@ from r1999extractor.reverse1999_catalog import Reverse1999NpcCatalog
 
 
 class Reverse1999BatchTest(unittest.TestCase):
+    def test_batch_replaces_short_prefetch_cache_with_full_external_wem(self):
+        from tests.test_playable_voice import synthetic_bank
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            audio = root / "en"
+            audio.mkdir()
+            bank = audio / "voice.bnk"
+            bank.write_bytes(synthetic_bank(42, b"short", 1, stream_type=1))
+            media = root / "Media/42.wem"
+            media.parent.mkdir()
+            media.write_bytes(b"full external")
+            stat = bank.stat()
+            index = root / "banks.json"
+            index.write_text(
+                json.dumps(
+                    {
+                        "game_audio_directory": str(audio),
+                        "banks": [
+                            {
+                                "path": bank.name,
+                                "filename": bank.name,
+                                "size": stat.st_size,
+                                "mtime_ns": stat.st_mtime_ns,
+                            }
+                        ],
+                    }
+                )
+            )
+            old = root / "old.wav"
+            old.write_bytes(b"short cache")
+            state = new_state()
+            state["bank_index"] = str(index)
+            state["mappings"] = [
+                {"speaker_name": "Test", "npc_id": "1", "chapter": "", "banks": [bank.name]}
+            ]
+            state["clips"] = [
+                {
+                    "bank": bank.name,
+                    "media_id": 42,
+                    "source_sha256": hashlib.sha256(b"short").hexdigest(),
+                    "reference_decode_version": 2,
+                    "wav": str(old),
+                }
+            ]
+            decoded = []
+
+            def convert(source, destination, **_options):
+                decoded.append(Path(source).read_bytes())
+                Path(destination).write_bytes(b"wav")
+
+            with (
+                patch("r1999extractor.reverse1999_batch.resolve_decoder", return_value="decoder"),
+                patch("r1999extractor.reverse1999_batch.convert_audio", side_effect=convert),
+            ):
+                extract_mapped_clips(state, cache_directory=root / "cache")
+
+        self.assertEqual(decoded, [b"full external"])
+        self.assertEqual(len(state["clips"]), 1)
+        self.assertEqual(
+            state["clips"][0]["source_sha256"], hashlib.sha256(b"full external").hexdigest()
+        )
+        self.assertIn(hashlib.sha256(b"full external").hexdigest()[:12], state["clips"][0]["wav"])
+
     def test_state_checkpoint_is_atomic_and_resumable(self):
         with TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "state.json"

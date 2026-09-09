@@ -131,6 +131,7 @@ class Reverse1999BankIndexTest(unittest.TestCase):
                     actions=(WwiseActionReference(30, 0x0403, 10),),
                     sound_ids=(10,),
                     media_ids=(20,),
+                    streamed_media_ids=(20,),
                 ),
             ),
         )
@@ -172,6 +173,7 @@ class Reverse1999BankIndexTest(unittest.TestCase):
                     ],
                     "sound_ids": [10],
                     "media_ids": [20],
+                    "streamed_media_ids": [20],
                 }
             ],
         )

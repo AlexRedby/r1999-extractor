@@ -37,6 +37,7 @@ class WwiseEventRoute:
     actions: tuple[WwiseActionReference, ...]
     sound_ids: tuple[int, ...]
     media_ids: tuple[int, ...]
+    streamed_media_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -138,13 +139,14 @@ def _parse_action(action, bank_version):
     return WwiseActionReference(action.object_id, action_type, target_id)
 
 
-def _parse_sound_media_id(sound, bank_version):
+def _parse_sound_source(sound, bank_version):
     payload = sound.payload
     stream_type_size = 4 if bank_version is not None and bank_version <= 89 else 1
     source_id_offset = 4 + stream_type_size
     if source_id_offset + 4 > len(payload):
         raise WwiseBankError(f"Wwise sound {sound.object_id} is truncated")
-    return struct.unpack_from("<I", payload, source_id_offset)[0]
+    stream_type = struct.unpack_from("<I" if stream_type_size == 4 else "<B", payload, 4)[0]
+    return stream_type, struct.unpack_from("<I", payload, source_id_offset)[0]
 
 
 def _skip_parameter_node_effects(payload, offset, bank_version):
@@ -227,7 +229,7 @@ def parse_hirc_event_routes(payload, bank_version):
     }
     sound_objects = {item.object_id: item for item in objects if item.object_type == 0x02}
     sounds = {
-        sound_id: _parse_sound_media_id(item, bank_version)
+        sound_id: _parse_sound_source(item, bank_version)
         for sound_id, item in sound_objects.items()
     }
     parent_ids = {
@@ -255,7 +257,13 @@ def parse_hirc_event_routes(payload, bank_version):
             for sound_id in sounds
             if any(_is_descendant_of(sound_id, target_id, parent_ids) for target_id in targets)
         )
-        media_ids = tuple(dict.fromkeys(sounds[sound_id] for sound_id in sound_ids))
+        media_ids = tuple(dict.fromkeys(sounds[sound_id][1] for sound_id in sound_ids))
+        # Stream type 0 is the only confirmed embedded source across supported
+        # Wwise versions. Unknown types stay external rather than being treated
+        # as playable from DATA.
+        streamed_media_ids = tuple(
+            dict.fromkeys(sounds[sound_id][1] for sound_id in sound_ids if sounds[sound_id][0] != 0)
+        )
         routes.append(
             WwiseEventRoute(
                 item.object_id,
@@ -263,6 +271,7 @@ def parse_hirc_event_routes(payload, bank_version):
                 route_actions,
                 sound_ids,
                 media_ids,
+                streamed_media_ids,
             )
         )
     return tuple(routes)

@@ -45,6 +45,7 @@ class AudioResolution:
     bank: str | None = None
     media_ids: tuple[int, ...] = ()
     available_media_ids: tuple[int, ...] = ()
+    streamed_media_ids: tuple[int, ...] = ()
 
 
 def normalize_audio_id(value):
@@ -135,14 +136,44 @@ class StoryAudioResolver:
         ):
             return None
         media_id = resolution.media_ids[0]
+        return media_id, self.read_media(resolution, media_id)
+
+    def read_media(self, resolution, media_id, *, embedded_media=None):
+        """Read full event media, never embedded prefetch bytes for streamed sources.
+
+        Reference builders may supply their validated bank snapshot to avoid
+        reading/parsing the same bank twice. Source selection remains shared.
+        """
+        if (
+            resolution.status != "installed"
+            or not resolution.bank
+            or media_id not in resolution.media_ids
+            or media_id not in resolution.available_media_ids
+        ):
+            raise StoryAudioResolutionError(f"Full media {media_id} is not installed")
         bank = self.banks.get(Path(resolution.bank).stem.casefold())
         if bank is None:
             raise StoryAudioResolutionError(
                 f"Resolved media {media_id} has no installed bank {resolution.bank!r}"
             )
         embedded_ids = set(bank.get("embedded_media_ids", ()))
-        if media_id not in embedded_ids:
-            return media_id, self._read_external_media(media_id, bank)
+        # Persisted story records omit stream type. Recovered resolutions must
+        # still obey the current bank index, not default to embedded prefetch.
+        streamed = set(resolution.streamed_media_ids)
+        for route in bank.get("events", ()):
+            if resolution.event is None or route.get("event_id") == wwise_event_id(
+                resolution.event
+            ):
+                streamed.update(route.get("streamed_media_ids", ()))
+        if media_id in streamed or media_id not in embedded_ids:
+            return self._read_external_media(media_id, bank)
+        if embedded_media is not None:
+            payload = embedded_media.get(media_id)
+            if payload is None:
+                raise StoryAudioResolutionError(
+                    f"Indexed embedded media {media_id} is absent from {resolution.bank}"
+                )
+            return payload
         key = str(bank.get("path") or bank.get("filename") or "").strip()
         if not key:
             raise StoryAudioResolutionError(
@@ -184,7 +215,7 @@ class StoryAudioResolver:
             raise StoryAudioResolutionError(
                 f"Indexed embedded media {media_id} is absent from {resolution.bank}"
             )
-        return media_id, payload
+        return payload
 
     def _read_external_media(self, media_id, bank):
         root = bank_external_media_root(self.bank_index, bank)
@@ -262,11 +293,13 @@ class StoryAudioResolver:
             )
 
         embedded = set(bank.get("embedded_media_ids", ()))
+        streamed = set(event.get("streamed_media_ids", ()))
         external_root = bank_external_media_root(self.bank_index, bank)
         available = tuple(
             media_id
             for media_id in media_ids
-            if media_id in embedded or (external_root / f"{media_id}.wem").is_file()
+            if (media_id in embedded and media_id not in streamed)
+            or (external_root / f"{media_id}.wem").is_file()
         )
         if not available:
             return self._configured_unavailable(
@@ -280,6 +313,7 @@ class StoryAudioResolver:
             bank=bank["filename"],
             media_ids=media_ids,
             available_media_ids=available,
+            streamed_media_ids=tuple(media_id for media_id in media_ids if media_id in streamed),
         )
 
     @staticmethod

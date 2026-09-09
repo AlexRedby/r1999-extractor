@@ -1,6 +1,7 @@
 import json
 import re
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -8,8 +9,13 @@ from vntts_artifacts.atomic_io import atomic_write_json
 
 from r1999extractor.reverse1999_config import default_output as default_dialogue_index
 from r1999extractor.reverse1999_index import default_output as default_bank_index
+from r1999extractor.reverse1999_voice_import import (
+    REFERENCE_DECODE_VERSION,
+    GameVoiceImportError,
+    read_full_bank_media,
+)
 from r1999extractor.settings import get_local_data_directory
-from r1999extractor.wwise import convert_audio, read_embedded_media
+from r1999extractor.wwise import convert_audio
 
 default_mapping_path = get_local_data_directory() / "reverse1999" / "speaker-mappings.json"
 default_audition_cache = get_local_data_directory() / "reverse1999" / "audition"
@@ -120,12 +126,17 @@ def prepare_audition_clip(
 ):
     bank = Path(bank).expanduser().resolve()
     cache_directory = Path(cache_directory).expanduser().resolve()
-    output = cache_directory / bank.stem / f"{media_id}.wav"
+    try:
+        selected = read_full_bank_media(bank, [media_id])[0]
+    except GameVoiceImportError as error:
+        raise Reverse1999AuditionError(str(error)) from error
+    output = (
+        cache_directory
+        / bank.stem
+        / f"{media_id}-{sha256(selected.data).hexdigest()[:12]}-v{REFERENCE_DECODE_VERSION}.wav"
+    )
     if output.is_file():
         return output
-    selected = next((item for item in read_embedded_media(bank) if item.media_id == media_id), None)
-    if selected is None:
-        raise Reverse1999AuditionError(f"Media {media_id} does not exist in {bank.name}")
     output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="r1999-audition-") as temporary_directory:
         source = Path(temporary_directory) / f"{media_id}.wem"

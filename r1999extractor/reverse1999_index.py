@@ -16,7 +16,7 @@ from r1999extractor.reverse1999_voice_import import (
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.wwise import WwiseBankError, inspect_bank
 
-index_version = 5
+index_version = 6
 default_output = get_local_data_directory() / "reverse1999" / "english-bank-index.json"
 npc_id_pattern = re.compile(r"npc[_-]?(\d{4,})", re.IGNORECASE)
 chapter_pattern = re.compile(r"chapter[_-]?(\d+)", re.IGNORECASE)
@@ -310,6 +310,7 @@ def inspect_bank_entry(bank, root, *, inspector=inspect_bank):
                     ],
                     "sound_ids": list(route.sound_ids),
                     "media_ids": list(route.media_ids),
+                    "streamed_media_ids": list(route.streamed_media_ids),
                 }
                 for route in summary.event_routes
             ],

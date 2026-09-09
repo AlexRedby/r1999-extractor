@@ -27,6 +27,7 @@ from r1999extractor.reverse1999_config import (
 )
 from r1999extractor.reverse1999_index import build_bank_index
 from r1999extractor.reverse1999_voice_import import (
+    REFERENCE_DECODE_VERSION,
     find_game_audio_directory,
 )
 from r1999extractor.settings import get_local_data_directory
@@ -93,6 +94,8 @@ def prepare_player_voice_candidates(
         json.dumps(
             {
                 "story_index_sha256": story_sha256,
+                "reference_decode_version": REFERENCE_DECODE_VERSION,
+                "bank_index_sha256": sha256_file(bank_index),
                 "roles": [normalize_character_name(role) for role in roles],
             },
             sort_keys=True,

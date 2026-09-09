@@ -8,7 +8,7 @@ import json
 import shutil
 import sys
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,10 +25,17 @@ from r1999extractor.playable_voice import (
 from r1999extractor.reverse1999_index import Reverse1999IndexError, bank_source_path
 from r1999extractor.reverse1999_index import default_output as default_bank_index
 from r1999extractor.reverse1999_voice_import import (
+    REFERENCE_DECODE_VERSION,
     GameVoiceImportError,
     decode_reference_data,
 )
-from r1999extractor.story_audio import wwise_event_id
+from r1999extractor.story_audio import (
+    AudioConfiguration,
+    StoryAudioResolutionError,
+    StoryAudioResolver,
+    normalize_audio_id,
+    wwise_event_id,
+)
 from r1999extractor.voice_reference_quality import (
     VoiceReferenceQualityError,
     analyze_voice_reference,
@@ -76,6 +83,7 @@ class BankSnapshot:
     sha256: str
     media: dict[int, bytes]
     routes: dict[int, tuple[int, ...]]
+    streamed_routes: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
 
 def _required_text(value, label):
@@ -277,6 +285,10 @@ def snapshot_bank(bank_index, filename):
         sha256=hashlib.sha256(payload).hexdigest(),
         media=media,
         routes={route.event_id: route.media_ids for route in summary.event_routes},
+        streamed_routes={
+            route.event_id: tuple(getattr(route, "streamed_media_ids", ()))
+            for route in summary.event_routes
+        },
     )
 
 
@@ -316,18 +328,44 @@ def build_story_voice_candidates(
             bank: bank_loader(bank_index, bank)
             for bank in sorted({line.source_bank for line in lines}, key=str.casefold)
         }
+        registry = {}
+        for line in lines:
+            audio_id = normalize_audio_id(line.source_audio_id)
+            if audio_id is None:
+                raise StoryVoiceCandidateError(f"Story line {line.line_id} has an invalid audio ID")
+            configuration = AudioConfiguration(
+                audio_id,
+                line.source_event,
+                line.source_bank,
+                "story_voice_candidates",
+            )
+            previous = registry.setdefault(audio_id, configuration)
+            if previous != configuration:
+                raise StoryVoiceCandidateError(f"Conflicting exact audio routes for {audio_id}")
+        resolver = StoryAudioResolver(registry, bank_index)
+        resolutions = {}
         grouped = {}
         for line in lines:
             snapshot = snapshots[line.source_bank]
-            routed = snapshot.routes.get(wwise_event_id(line.source_event))
-            if routed != line.source_media_ids:
+            event_id = wwise_event_id(line.source_event)
+            routed = snapshot.routes.get(event_id)
+            resolution = resolver.resolve(line.source_audio_id)
+            if (
+                routed != line.source_media_ids
+                or resolution.status != "installed"
+                or resolution.event != line.source_event
+                or resolution.bank != line.source_bank
+                or resolution.media_ids != line.source_media_ids
+                or snapshot.streamed_routes.get(event_id, ()) != resolution.streamed_media_ids
+            ):
                 raise StoryVoiceCandidateError(
                     f"Exact bank route changed for {line.line_id}: {line.source_event}"
                 )
+            resolutions[line.line_id] = resolution
             for media_id in line.source_media_ids:
-                if media_id not in snapshot.media:
+                if media_id not in resolution.available_media_ids:
                     raise StoryVoiceCandidateError(
-                        f"Routed media {media_id} is not embedded in {line.source_bank}"
+                        f"Full routed media {media_id} is unavailable for {line.line_id}"
                     )
                 key = (line.character, line.portrait, line.source_bank, media_id)
                 grouped.setdefault(key, []).append(line)
@@ -352,19 +390,37 @@ def build_story_voice_candidates(
                     )
                 character, portrait, _bank = next(iter(identities))
                 for media_id in snapshots[bank].media:
-                    grouped.setdefault((character, portrait, bank, media_id), [])
+                    key = (character, portrait, bank, media_id)
+                    if not grouped.get(key) and any(
+                        media_id in streamed_media_ids
+                        for streamed_media_ids in snapshots[bank].streamed_routes.values()
+                    ):
+                        raise StoryVoiceCandidateError(
+                            "--include-all-bank-media cannot prepare unlinked streamed media"
+                        )
+                    grouped.setdefault(key, [])
 
         candidates = []
         for (character, portrait, bank, media_id), source_lines in sorted(
             grouped.items(),
             key=lambda value: tuple(str(part or "").casefold() for part in value[0]),
         ):
+            source_modes = {
+                media_id in resolutions[line.line_id].streamed_media_ids
+                or media_id not in snapshots[bank].media
+                for line in source_lines
+            }
+            if len(source_modes) > 1:
+                raise StoryVoiceCandidateError(
+                    f"Conflicting embedded/streamed routes for {bank} media {media_id}"
+                )
             group_slug = "-".join(
                 (
                     slugify(character, fallback="character"),
                     slugify(Path(portrait).stem if portrait else "no-portrait"),
                     slugify(Path(bank).stem),
                     str(media_id),
+                    f"decoded-v{REFERENCE_DECODE_VERSION}",
                 )
             )
             relative = Path("references") / group_slug / f"{group_slug}.wav"
@@ -376,8 +432,21 @@ def build_story_voice_candidates(
                 raise StoryVoiceCandidateError(
                     f"Embedded media {media_id} has no exact event route in {bank}"
                 )
+            if source_lines:
+                try:
+                    payload = resolver.read_media(
+                        resolutions[source_lines[0].line_id],
+                        media_id,
+                        embedded_media=snapshot.media,
+                    )
+                except StoryAudioResolutionError as error:
+                    raise StoryVoiceCandidateError(
+                        f"Full routed media {media_id} is unavailable for {source_lines[0].line_id}"
+                    ) from error
+            else:
+                payload = snapshot.media[media_id]
             imported = media_decoder(
-                snapshot.media[media_id],
+                payload,
                 staging / relative,
                 media_id,
                 decoder,
@@ -396,6 +465,7 @@ def build_story_voice_candidates(
                     "source_bank_sha256": snapshot.sha256,
                     "media_id": media_id,
                     "source_sha256": imported.source_sha256,
+                    "reference_decode_version": REFERENCE_DECODE_VERSION,
                     "candidate_origin": candidate_origin,
                     "source_event_ids": event_ids,
                     "reference": relative.as_posix(),

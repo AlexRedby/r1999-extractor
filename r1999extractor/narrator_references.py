@@ -8,7 +8,7 @@ from pathlib import Path
 from vntts_artifacts.file_integrity import sha256_file
 from vntts_artifacts.voice_manifest import normalize_character_name, write_voice_manifest
 
-from r1999extractor.reverse1999_voice_import import decode_reference_data
+from r1999extractor.reverse1999_voice_import import REFERENCE_DECODE_VERSION, decode_reference_data
 from r1999extractor.story_audio import AudioConfiguration, StoryAudioResolver, wwise_event_id
 from r1999extractor.story_voice_candidates import (
     StoryVoiceCandidateError,
@@ -108,6 +108,7 @@ class NarratorReferenceSession:
         if not selected:
             raise StoryVoiceCandidateError("Selected narrator reference is no longer available")
         payloads = []
+        source_kinds = []
         for line in selected:
             bank = line.source_bank
             if bank not in self.snapshots:
@@ -126,16 +127,21 @@ class NarratorReferenceSession:
                 or resolution.media_ids != line.source_media_ids
                 or resolution.bank != bank
                 or resolution.event != line.source_event
+                or snapshot.streamed_routes.get(wwise_event_id(line.source_event), ())
+                != resolution.streamed_media_ids
             ):
                 raise StoryVoiceCandidateError(
                     f"Spoken audio is no longer available for {line.line_id}"
                 )
             media_id = line.source_media_ids[0]
             # Reuse the validated snapshot instead of reading/parsing this bank twice.
-            payload = snapshot.media.get(media_id)
-            if payload is None:
-                _media_id, payload = self.resolver.read_single_available_media(resolution)
+            payload = self.resolver.read_media(resolution, media_id, embedded_media=snapshot.media)
             payloads.append(payload)
+            source_kinds.append(
+                "external"
+                if media_id in resolution.streamed_media_ids or media_id not in snapshot.media
+                else "embedded"
+            )
         identity = hashlib.sha256(
             json.dumps(
                 [
@@ -144,7 +150,7 @@ class NarratorReferenceSession:
                 ]
             ).encode()
         ).hexdigest()
-        directory = self.output / f"narrator-spoken-v1-{identity}"
+        directory = self.output / f"narrator-spoken-v{REFERENCE_DECODE_VERSION}-{identity}"
         directory.resolve().relative_to(self.output)
         manifest = directory / "manifest.json"
         voices = [
@@ -161,6 +167,9 @@ class NarratorReferenceSession:
                     "bank_sha256": self.snapshots[line.source_bank][0].sha256,
                     "media_id": line.source_media_ids[0],
                     "source_sha256": hashlib.sha256(payload).hexdigest(),
+                    "source_kind": source_kinds[position - 1],
+                    "source_size_bytes": len(payload),
+                    "decode_version": REFERENCE_DECODE_VERSION,
                 },
             }
             for position, (line, payload) in enumerate(zip(selected, payloads, strict=True), 1)
@@ -182,6 +191,12 @@ class NarratorReferenceSession:
                 **({"runner": runner} if runner is not None else {}),
             )
             voice["vntts.narrator_reference"]["reference_sha256"] = reference.reference_sha256
+            voice["vntts.narrator_reference"]["decoded_duration_seconds"] = (
+                reference.decoded_duration_seconds
+            )
+            voice["vntts.narrator_reference"]["reference_duration_seconds"] = (
+                reference.reference_duration_seconds
+            )
         write_voice_manifest(manifest, {"version": 2, "voices": voices})
         return manifest
 
@@ -191,6 +206,8 @@ def _cached_audio_matches(manifest, expected):
         saved = json.loads(manifest.read_text(encoding="utf-8"))
         for voice in saved["voices"]:
             digest = voice["vntts.narrator_reference"].pop("reference_sha256")
+            voice["vntts.narrator_reference"].pop("decoded_duration_seconds")
+            voice["vntts.narrator_reference"].pop("reference_duration_seconds")
             reference = manifest.parent / voice["references"][0]
             reference.resolve().relative_to(manifest.parent.resolve())
             if reference.is_symlink() or sha256_file(reference) != digest:

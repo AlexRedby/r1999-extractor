@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from r1999extractor.reverse1999_index import index_version
 from r1999extractor.reverse1999_voice_import import ImportedReference
 from r1999extractor.story_audio import wwise_event_id
 from r1999extractor.story_voice_candidates import (
@@ -56,14 +57,14 @@ def write_story(path, lines):
     return path
 
 
-def write_bank_index(path, audio_root):
+def write_bank_index(path, audio_root, *, streamed_media_ids=()):
     bank = audio_root / "hero_story.bnk"
     bank.write_bytes(b"synthetic bank")
     stat = bank.stat()
     path.write_text(
         json.dumps(
             {
-                "version": 5,
+                "version": index_version,
                 "game_audio_directory": str(audio_root),
                 "bank_count": 1,
                 "banks": [
@@ -77,6 +78,7 @@ def write_bank_index(path, audio_root):
                             {
                                 "event_id": wwise_event_id("play_hero_line"),
                                 "media_ids": [10],
+                                "streamed_media_ids": list(streamed_media_ids),
                             }
                         ],
                     }
@@ -231,6 +233,125 @@ class StoryVoiceCandidateTest(unittest.TestCase):
         self.assertEqual(reference_digest, report["candidates"][0]["reference_sha256"])
         self.assertFalse(manifest_exists)
 
+    def test_uses_full_external_media_for_a_streamed_route(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = write_story(root / "story.jsonl", [story_line(1, "Exact transcript.")])
+            audio_root = root / "audio"
+            audio_root.mkdir()
+            bank_index, bank = write_bank_index(
+                root / "banks.json", audio_root, streamed_media_ids=(10,)
+            )
+            (root / "Media").mkdir()
+            (root / "Media/10.wem").write_bytes(b"full external media")
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"embedded prefetch"},
+                routes={wwise_event_id("play_hero_line"): (10,)},
+                streamed_routes={wwise_event_id("play_hero_line"): (10,)},
+            )
+            decoded = []
+
+            def decode(data, output, media_id, _decoder, *, bank=None):
+                decoded.append(data)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"normalized wav")
+                return ImportedReference(
+                    output,
+                    media_id,
+                    hashlib.sha256(data).hexdigest(),
+                    hashlib.sha256(output.read_bytes()).hexdigest(),
+                    bank,
+                )
+
+            _report_path, report = build_story_voice_candidates(
+                story,
+                bank_index,
+                ["Hero"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, _filename: snapshot,
+                media_decoder=decode,
+                analyzer=clean_metrics,
+            )
+
+        self.assertEqual(decoded, [b"full external media"])
+        self.assertEqual(
+            report["candidates"][0]["source_sha256"],
+            hashlib.sha256(b"full external media").hexdigest(),
+        )
+
+    def test_does_not_prepare_a_candidate_for_an_unavailable_full_stream(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = write_story(
+                root / "story.jsonl",
+                [
+                    {
+                        **story_line(1, "Unavailable full audio."),
+                        "source_audio_status": "unavailable",
+                    }
+                ],
+            )
+            audio_root = root / "audio"
+            audio_root.mkdir()
+            bank_index, _bank = write_bank_index(
+                root / "banks.json", audio_root, streamed_media_ids=(10,)
+            )
+
+            with self.assertRaisesRegex(StoryVoiceCandidateError, "No installed same-speaker"):
+                build_story_voice_candidates(
+                    story,
+                    bank_index,
+                    ["Hero"],
+                    root / "candidates",
+                    decoder="true",
+                )
+
+    def test_rejects_a_media_id_with_conflicting_embedded_and_streamed_routes(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            streamed = {
+                **story_line(2, "Streamed route."),
+                "source_event": "play_hero_stream",
+            }
+            story = write_story(root / "story.jsonl", [story_line(1, "Embedded route."), streamed])
+            audio_root = root / "audio"
+            audio_root.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio_root)
+            document = json.loads(bank_index.read_text(encoding="utf-8"))
+            document["banks"][0]["events"].append(
+                {
+                    "event_id": wwise_event_id("play_hero_stream"),
+                    "media_ids": [10],
+                    "streamed_media_ids": [10],
+                }
+            )
+            bank_index.write_text(json.dumps(document), encoding="utf-8")
+            (root / "Media").mkdir()
+            (root / "Media/10.wem").write_bytes(b"full external media")
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"embedded media"},
+                routes={
+                    wwise_event_id("play_hero_line"): (10,),
+                    wwise_event_id("play_hero_stream"): (10,),
+                },
+                streamed_routes={wwise_event_id("play_hero_stream"): (10,)},
+            )
+
+            with self.assertRaisesRegex(StoryVoiceCandidateError, "Conflicting embedded"):
+                build_story_voice_candidates(
+                    story,
+                    bank_index,
+                    ["Hero"],
+                    root / "candidates",
+                    decoder="true",
+                    bank_loader=lambda _index, _filename: snapshot,
+                )
+
     def test_include_all_bank_media_adds_unrouted_candidates_without_transcripts(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -307,6 +428,35 @@ class StoryVoiceCandidateTest(unittest.TestCase):
             with self.assertRaisesRegex(
                 StoryVoiceCandidateError, "one exact role/portrait identity"
             ):
+                build_story_voice_candidates(
+                    story,
+                    bank_index,
+                    ["Hero"],
+                    root / "candidates",
+                    decoder="true",
+                    bank_loader=lambda _index, _filename: snapshot,
+                    include_all_bank_media=True,
+                )
+
+    def test_include_all_bank_media_rejects_unlinked_streamed_prefetch(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = write_story(root / "story.jsonl", [story_line(1, "Routed exact line.")])
+            audio_root = root / "audio"
+            audio_root.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio_root)
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"routed media", 20: b"embedded prefetch"},
+                routes={
+                    wwise_event_id("play_hero_line"): (10,),
+                    2020: (20,),
+                },
+                streamed_routes={2020: (20,)},
+            )
+
+            with self.assertRaisesRegex(StoryVoiceCandidateError, "unlinked streamed media"):
                 build_story_voice_candidates(
                     story,
                     bank_index,

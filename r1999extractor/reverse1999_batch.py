@@ -31,9 +31,11 @@ from r1999extractor.reverse1999_config import default_output as default_dialogue
 from r1999extractor.reverse1999_index import bank_source_path, build_bank_index
 from r1999extractor.reverse1999_index import default_output as default_bank_index
 from r1999extractor.reverse1999_voice_import import (
+    REFERENCE_DECODE_VERSION,
     ImportedReference,
     find_game_audio_directory,
     is_scene_audio_bank,
+    read_full_bank_media,
     update_manifest,
 )
 from r1999extractor.reverse1999_voice_import import default_output as default_voice_output
@@ -45,7 +47,7 @@ from r1999extractor.voice_reference_quality import (
     select_reference_set,
     trim_and_normalize_voice_reference,
 )
-from r1999extractor.wwise import convert_audio, read_embedded_media, resolve_decoder
+from r1999extractor.wwise import convert_audio, resolve_decoder
 
 state_version = 1
 default_state_path = get_local_data_directory() / "reverse1999" / "batch-state.json"
@@ -366,19 +368,26 @@ def extract_mapped_clips(
                 continue
             bank = bank_source_path(bank_index, entry)
             try:
-                media = read_embedded_media(bank)
+                media = read_full_bank_media(bank)
                 with TemporaryDirectory(prefix="r1999-batch-") as temporary_directory:
                     temporary_directory = Path(temporary_directory)
                     for item in media:
+                        source_sha256 = hashlib.sha256(item.data).hexdigest()
                         key = (entry["filename"], item.media_id)
-                        if key in existing and Path(existing[key]["wav"]).is_file():
+                        previous = existing.get(key)
+                        if (
+                            previous
+                            and previous.get("source_sha256") == source_sha256
+                            and previous.get("reference_decode_version") == REFERENCE_DECODE_VERSION
+                            and Path(previous["wav"]).is_file()
+                        ):
                             continue
                         wem = temporary_directory / f"{item.media_id}.wem"
                         wav = (
                             cache_directory
                             / mapping["npc_id"]
                             / entry["filename"]
-                            / f"{item.media_id}.wav"
+                            / f"{item.media_id}-{source_sha256[:12]}-v{REFERENCE_DECODE_VERSION}.wav"
                         )
                         wav.parent.mkdir(parents=True, exist_ok=True)
                         wem.write_bytes(item.data)
@@ -389,7 +398,8 @@ def extract_mapped_clips(
                             "chapter": mapping["chapter"],
                             "bank": entry["filename"],
                             "media_id": item.media_id,
-                            "source_sha256": hashlib.sha256(item.data).hexdigest(),
+                            "source_sha256": source_sha256,
+                            "reference_decode_version": REFERENCE_DECODE_VERSION,
                             "wav": str(wav),
                             "status": "extracted",
                         }

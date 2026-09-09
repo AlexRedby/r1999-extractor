@@ -42,7 +42,7 @@ def make_hirc_object(object_type, object_id, payload=b""):
     return bytes([object_type]) + struct.pack("<I", len(body)) + body
 
 
-def make_routed_bank():
+def make_routed_bank(*, bank_version=154, stream_type=0):
     sound_id = 101
     media_id = 202
     action_id = 303
@@ -50,19 +50,25 @@ def make_routed_bank():
     sound = make_hirc_object(
         0x02,
         sound_id,
-        struct.pack("<IBI", 0x00040001, 0, media_id),
+        struct.pack("<I", 0x00040001)
+        + struct.pack("<I" if bank_version <= 89 else "<B", stream_type)
+        + struct.pack("<I", media_id),
     )
     action = make_hirc_object(
         0x03,
         action_id,
         struct.pack("<HIB", 0x0403, sound_id, 0),
     )
-    event = make_hirc_object(0x04, event_id, b"\x01" + struct.pack("<I", action_id))
+    event = make_hirc_object(
+        0x04,
+        event_id,
+        (struct.pack("<I", 1) if bank_version <= 122 else b"\x01") + struct.pack("<I", action_id),
+    )
     hirc = struct.pack("<I", 3) + sound + action + event
     return (
         b"BKHD"
         + struct.pack("<I", 4)
-        + struct.pack("<I", 154)
+        + struct.pack("<I", bank_version)
         + b"HIRC"
         + struct.pack("<I", len(hirc))
         + hirc
@@ -113,9 +119,32 @@ class WwiseBankTest(unittest.TestCase):
                     actions=(WwiseActionReference(303, 0x0403, 101),),
                     sound_ids=(101,),
                     media_ids=(202,),
+                    streamed_media_ids=(),
                 ),
             ),
         )
+
+    def test_maps_prefetched_and_streaming_media_to_external_wem_by_version(self):
+        cases = (
+            (89, 0, ()),
+            (89, 1, (202,)),
+            (89, 2, (202,)),
+            (90, 0, ()),
+            (90, 1, (202,)),
+            (90, 2, (202,)),
+            (154, 0, ()),
+            (154, 1, (202,)),
+            (154, 2, (202,)),
+            (154, 3, (202,)),
+        )
+
+        for bank_version, stream_type, expected in cases:
+            with self.subTest(bank_version=bank_version, stream_type=stream_type):
+                route = inspect_bank_data(
+                    make_routed_bank(bank_version=bank_version, stream_type=stream_type)
+                ).event_routes[0]
+                self.assertEqual(route.media_ids, (202,))
+                self.assertEqual(route.streamed_media_ids, expected)
 
     def test_maps_container_target_to_descendant_sound(self):
         sound_id = 101

@@ -12,6 +12,7 @@ from r1999extractor.bootstrap import (
     main,
     prepare_player_voice_candidates,
 )
+from r1999extractor.reverse1999_index import index_version
 from r1999extractor.story_audio import wwise_event_id
 from r1999extractor.story_voice_candidates import (
     REPORT_SCHEMA,
@@ -32,7 +33,7 @@ class BootstrapTest(unittest.TestCase):
             "json_story_audio_role": [[1314101, "play_hero3141_mainvoc_1", "hero3141_mainvoc"]],
         }
         bank_index = {
-            "version": 5,
+            "version": index_version,
             "game_audio_directory": "/game/en",
             "banks": [
                 {
@@ -104,7 +105,7 @@ class BootstrapTest(unittest.TestCase):
             config.mkdir()
             audio.mkdir()
             bundle.write_bytes(b"synthetic")
-            bank_index = {"version": 5, "game_audio_directory": str(audio), "banks": []}
+            bank_index = {"version": index_version, "game_audio_directory": str(audio), "banks": []}
             progress = []
             with (
                 patch("r1999extractor.bootstrap.load_config_directory", return_value=({}, {})),
@@ -229,13 +230,24 @@ class BootstrapTest(unittest.TestCase):
             ):
                 first = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
                 second = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
+                self.assertEqual(builds, [("Hero",)])
+                with patch("r1999extractor.bootstrap.REFERENCE_DECODE_VERSION", 3):
+                    new_policy = prepare_player_voice_candidates(
+                        roles=("Hero",), data_directory=root
+                    )
+                (output / "english-bank-index.json").write_text(
+                    '{"rebuilt":true}', encoding="utf-8"
+                )
+                new_index = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
+                self.assertNotEqual(first, new_policy)
+                self.assertNotEqual(first, new_index)
 
             manifest = json.loads(first.read_text(encoding="utf-8"))
             evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
 
         self.assertEqual(first, second)
-        self.assertEqual(builds, [("Hero",)])
-        portraits.assert_called_once_with(
+        self.assertEqual(builds, [("Hero",)] * 3)
+        portraits.assert_any_call(
             bundles.resolve(),
             {"hero.png"},
             (output / "portraits").resolve(),

@@ -1,7 +1,10 @@
 import hashlib
+import io
 import json
 import unittest
+import wave
 from pathlib import Path
+from subprocess import CompletedProcess
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -19,6 +22,57 @@ from tests.test_story_voice_candidates import story_line, write_story
 
 
 class NarratorReferencesTest(unittest.TestCase):
+    def test_prefetch_reference_decodes_full_external_wav_and_versions_cache(self):
+        def wav_bytes(seconds):
+            output = io.BytesIO()
+            with wave.open(output, "wb") as wav:
+                wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+                wav.writeframes(b"\x00\x10" * round(seconds * 24000))
+            return output.getvalue()
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            story, index, _lines = self.fixture(root)
+            (root / "en/mianvoc_hero3032.bnk").write_bytes(
+                synthetic_bank(
+                    10, wav_bytes(0.077), wwise_event_id("play_hero_line"), stream_type=1
+                )
+            )
+            build_bank_index(root / "en", output=index)
+            full = root / "Media/10.wem"
+            full.parent.mkdir()
+            full.write_bytes(wav_bytes(3))
+            calls = []
+
+            def decoder_runner(args, **_kwargs):
+                calls.append(args)
+                Path(args[3]).write_bytes(Path(args[4]).read_bytes())
+                return CompletedProcess(args, 0, "", "")
+
+            session = NarratorReferenceSession(story, index, "Centurion", root / "candidates")
+            with patch("r1999extractor.wwise.resolve_decoder", return_value="test-decoder"):
+                manifest = session.prepare(decoder="test-decoder", runner=decoder_runner)
+                self.assertEqual(
+                    session.prepare(decoder="test-decoder", runner=decoder_runner), manifest
+                )
+                self.assertEqual(len(calls), 1)
+                metadata = json.loads(manifest.read_text())["voices"][0]["vntts.narrator_reference"]
+                self.assertEqual(metadata["source_kind"], "external")
+                self.assertEqual(
+                    metadata["source_sha256"], hashlib.sha256(full.read_bytes()).hexdigest()
+                )
+                self.assertEqual(metadata["decoded_duration_seconds"], 3)
+                self.assertEqual(metadata["reference_duration_seconds"], 3)
+                with wave.open(str(manifest.parent / "references/1.wav")) as wav:
+                    self.assertEqual(wav.getnframes() / wav.getframerate(), 3)
+                with patch("r1999extractor.narrator_references.REFERENCE_DECODE_VERSION", 3):
+                    changed = session.prepare(decoder="test-decoder", runner=decoder_runner)
+                self.assertNotEqual(changed, manifest)
+                self.assertEqual(len(calls), 2)
+                full.unlink()
+                with self.assertRaisesRegex(StoryVoiceCandidateError, "no longer available"):
+                    session.prepare(decoder="test-decoder", runner=decoder_runner)
+
     def test_session_reuses_catalog_bank_and_verified_disk_audio(self):
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -221,7 +275,7 @@ class NarratorReferencesTest(unittest.TestCase):
                         story, index, "Centurion", root / "candidates"
                     )
                 render.assert_called_once()
-                self.assertTrue(manifest.parent.name.startswith("narrator-spoken-v1-"))
+                self.assertTrue(manifest.parent.name.startswith("narrator-spoken-v2-"))
                 voices = json.loads(manifest.read_text())["voices"]
                 self.assertEqual(len(voices), 1)
                 evidence = voices[0]["vntts.narrator_reference"]

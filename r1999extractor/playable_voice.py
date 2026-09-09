@@ -18,7 +18,6 @@ from r1999extractor.reverse1999_config import (
 )
 from r1999extractor.reverse1999_index import (
     Reverse1999IndexError,
-    bank_external_media_root,
     bank_source_path,
 )
 from r1999extractor.reverse1999_index import (
@@ -29,9 +28,11 @@ from r1999extractor.reverse1999_index import (
 )
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.story_audio import (
+    AudioConfiguration,
     StoryAudioResolutionError,
     StoryAudioResolver,
     build_audio_registry,
+    normalize_audio_id,
     wwise_event_id,
 )
 from r1999extractor.story_index import default_output as default_story_index
@@ -302,6 +303,15 @@ def validate_bank_index_document(document):
                 raise PlayableVoiceError(f"{event_label} has invalid media_ids")
             if len(media_ids) != len(set(media_ids)):
                 raise PlayableVoiceError(f"{event_label} has duplicate media_ids")
+            streamed = event.get("streamed_media_ids", [])
+            if not isinstance(streamed, list) or any(
+                not _is_integer(media_id) or media_id < 0 for media_id in streamed
+            ):
+                raise PlayableVoiceError(f"{event_label} has invalid streamed_media_ids")
+            if len(streamed) != len(set(streamed)) or not set(streamed).issubset(media_ids):
+                raise PlayableVoiceError(
+                    f"{event_label} streamed_media_ids must be unique routed media"
+                )
     return document
 
 
@@ -317,6 +327,23 @@ def _bank_entries(bank_index):
 
 def bind_playable_voice_provenance(lines, bank_index):
     validate_bank_index_document(bank_index)
+    registry = {}
+    for line in lines:
+        if line.source_audio_status != "installed":
+            continue
+        audio_id = normalize_audio_id(line.voice_id)
+        if audio_id is None:
+            raise PlayableVoiceError(f"Installed voice has an invalid ID: {line.voice_id!r}")
+        configuration = AudioConfiguration(
+            audio_id,
+            line.source_event or "",
+            line.source_bank or "",
+            "playable_voice",
+        )
+        previous = registry.setdefault(audio_id, configuration)
+        if previous != configuration:
+            raise PlayableVoiceError(f"Conflicting exact audio routes for {audio_id}")
+    resolver = StoryAudioResolver(registry, bank_index)
     entries = _bank_entries(bank_index)
     banks = {}
     bound = []
@@ -355,46 +382,49 @@ def bind_playable_voice_provenance(lines, bank_index):
             except WwiseBankError as error:
                 raise PlayableVoiceError(f"Unable to parse {bank_path.name}: {error}") from error
             routes = {route.event_id: route.media_ids for route in summary.event_routes}
-            banks[key] = (hashlib.sha256(bank_data).hexdigest(), media, routes)
-        bank_sha256, embedded, routes = banks[key]
-        external_root = bank_external_media_root(bank_index, entry)
+            streamed_routes = {
+                route.event_id: tuple(getattr(route, "streamed_media_ids", ()))
+                for route in summary.event_routes
+            }
+            banks[key] = (
+                hashlib.sha256(bank_data).hexdigest(),
+                media,
+                routes,
+                streamed_routes,
+            )
+        bank_sha256, embedded, routes, streamed_routes = banks[key]
         if not line.source_event:
             raise PlayableVoiceError(f"Installed voice {line.voice_id} has no source event")
         fresh_media_ids = routes.get(wwise_event_id(line.source_event))
-        if fresh_media_ids != line.source_media_ids:
+        resolution = resolver.resolve(line.voice_id)
+        if (
+            fresh_media_ids != line.source_media_ids
+            or resolution.status != "installed"
+            or resolution.event != line.source_event
+            or resolution.bank != line.source_bank
+            or resolution.media_ids != line.source_media_ids
+            or resolution.available_media_ids != line.available_media_ids
+            or streamed_routes.get(wwise_event_id(line.source_event), ())
+            != resolution.streamed_media_ids
+        ):
             raise PlayableVoiceError(
                 f"Voice bank route drift for {line.voice_id}: exact bank bytes and index disagree"
             )
         media_hashes = []
         for media_id in line.available_media_ids:
-            media_data = embedded.get(media_id)
-            location = "embedded"
-            if media_data is None:
-                external = external_root / f"{media_id}.wem"
-                if not external.is_file():
-                    raise PlayableVoiceError(
-                        f"Resolved media {media_id} is no longer installed for {line.voice_id}"
-                    )
-                try:
-                    resolved_external = external.resolve(strict=True)
-                    resolved_external.relative_to(external_root)
-                except ValueError as error:
-                    raise PlayableVoiceError(
-                        f"Resolved media {media_id} escapes media root for {line.voice_id}"
-                    ) from error
-                except OSError as error:
-                    raise PlayableVoiceError(
-                        f"Unable to resolve media {media_id} for {line.voice_id}: {error}"
-                    ) from error
-                before = resolved_external.stat()
-                media_data = resolved_external.read_bytes()
-                after = resolved_external.stat()
-                if (before.st_size, before.st_mtime_ns) != (
-                    after.st_size,
-                    after.st_mtime_ns,
-                ):
-                    raise PlayableVoiceError(f"Resolved media {media_id} changed while it was read")
-                location = "external"
+            try:
+                media_data = resolver.read_media(
+                    resolution,
+                    media_id,
+                    embedded_media=embedded,
+                )
+            except StoryAudioResolutionError as error:
+                raise PlayableVoiceError(str(error)) from error
+            location = (
+                "external"
+                if media_id in resolution.streamed_media_ids or media_id not in embedded
+                else "embedded"
+            )
             media_hashes.append(
                 {
                     "media_id": media_id,

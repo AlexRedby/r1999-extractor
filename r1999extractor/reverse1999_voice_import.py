@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,14 +26,17 @@ from r1999extractor.settings import get_local_data_directory
 from r1999extractor.voice_reference_quality import trim_and_normalize_voice_reference
 from r1999extractor.wwise import (
     AudioConversionError,
+    EmbeddedMedia,
     WwiseBankError,
     convert_audio,
+    inspect_bank,
     read_embedded_media,
     resolve_decoder,
 )
 
 project_root = Path(__file__).resolve().parents[1]
 default_output = get_local_data_directory() / "voice-packs" / "reverse1999"
+REFERENCE_DECODE_VERSION = 2
 
 
 class GameVoiceImportError(RuntimeError):
@@ -46,6 +50,8 @@ class ImportedReference:
     source_sha256: str
     reference_sha256: str
     bank: str | None = None
+    decoded_duration_seconds: float | None = None
+    reference_duration_seconds: float | None = None
 
 
 def is_scene_audio_bank(bank):
@@ -175,16 +181,9 @@ def decode_references(
             f"Scene-audio bank {Path(bank).name} may contain TV, radio, crowd, or "
             "unrelated voices; pass explicitly reviewed --media-id values"
         )
-    media = read_embedded_media(bank)
+    media = read_full_bank_media(bank, media_ids)
     if media_ids:
-        by_id = {entry.media_id: entry for entry in media}
-        missing = [media_id for media_id in media_ids if media_id not in by_id]
-        if missing:
-            joined = ", ".join(str(media_id) for media_id in missing)
-            raise GameVoiceImportError(
-                f"Voice bank {bank.name} does not contain media ID(s): {joined}"
-            )
-        selected = [by_id[media_id] for media_id in dict.fromkeys(media_ids)]
+        selected = media
     else:
         selected = sorted(media, key=lambda entry: entry.size, reverse=True)[:reference_count]
     if not selected:
@@ -208,6 +207,81 @@ def decode_references(
     return decoded
 
 
+def read_full_bank_media(bank, media_ids=None):
+    """Return complete WEM payloads, substituting external files for prefetches."""
+    bank = Path(bank).expanduser().resolve()
+    from r1999extractor.reverse1999_index import index_version
+    from r1999extractor.story_audio import (
+        AudioResolution,
+        StoryAudioResolutionError,
+        StoryAudioResolver,
+    )
+
+    try:
+        summary = inspect_bank(bank)
+        try:
+            media = read_embedded_media(bank)
+        except WwiseBankError:
+            media = ()
+        by_id = {entry.media_id: entry for entry in media}
+        streamed_media_ids = {
+            media_id for route in summary.event_routes for media_id in route.streamed_media_ids
+        }
+        routed_media_ids = {
+            media_id for route in summary.event_routes for media_id in route.media_ids
+        }
+        available_ids = tuple(dict.fromkeys((*by_id, *routed_media_ids)))
+        selected_ids = available_ids if media_ids is None else tuple(dict.fromkeys(media_ids))
+        missing = [media_id for media_id in selected_ids if media_id not in available_ids]
+        if missing:
+            joined = ", ".join(str(media_id) for media_id in missing)
+            raise GameVoiceImportError(
+                f"Voice bank {bank.name} does not contain media ID(s): {joined}"
+            )
+        resolver = StoryAudioResolver(
+            {},
+            {
+                "version": index_version,
+                "game_audio_directory": str(bank.parent),
+                "banks": [
+                    {
+                        "path": bank.name,
+                        "filename": bank.name,
+                        "embedded_media_ids": list(summary.media_ids),
+                    }
+                ],
+            },
+        )
+        resolution = AudioResolution(
+            "installed",
+            "legacy_explicit_media",
+            bank=bank.name,
+            media_ids=selected_ids,
+            available_media_ids=selected_ids,
+            streamed_media_ids=tuple(
+                media_id for media_id in selected_ids if media_id in streamed_media_ids
+            ),
+        )
+    except (WwiseBankError, StoryAudioResolutionError) as error:
+        raise GameVoiceImportError(f"Unable to inspect voice bank {bank.name}: {error}") from error
+
+    full_media = []
+    embedded_media = {entry.media_id: entry.data for entry in media}
+    for media_id in selected_ids:
+        try:
+            payload = resolver.read_media(
+                resolution,
+                media_id,
+                embedded_media=embedded_media,
+            )
+        except StoryAudioResolutionError as error:
+            raise GameVoiceImportError(
+                f"Unable to read full media {media_id} from {bank.name}: {error}"
+            ) from error
+        full_media.append(EmbeddedMedia(media_id, payload))
+    return full_media
+
+
 def decode_reference_data(data, output, media_id, decoder, *, bank=None, runner=None):
     """Decode one already-snapshotted Wwise media payload into a reference WAV."""
     if not isinstance(data, bytes) or not data:
@@ -226,13 +300,19 @@ def decode_reference_data(data, output, media_id, decoder, *, bank=None, runner=
             overwrite=True,
             **({"runner": runner} if runner is not None else {}),
         )
+        with wave.open(str(decoded_output), "rb") as wav:
+            decoded_duration = wav.getnframes() / wav.getframerate()
         trim_and_normalize_voice_reference(decoded_output, output)
+        with wave.open(str(output), "rb") as wav:
+            reference_duration = wav.getnframes() / wav.getframerate()
     return ImportedReference(
         path=output,
         media_id=media_id,
         source_sha256=hashlib.sha256(data).hexdigest(),
         reference_sha256=sha256_file(output),
         bank=bank,
+        decoded_duration_seconds=decoded_duration,
+        reference_duration_seconds=reference_duration,
     )
 
 

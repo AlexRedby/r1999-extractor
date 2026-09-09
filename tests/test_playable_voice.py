@@ -43,7 +43,7 @@ def hirc_object(object_type, object_id, payload=b""):
     return bytes([object_type]) + struct.pack("<I", len(body)) + body
 
 
-def synthetic_bank(media_id, content, event_id, *, routed_media_id=None):
+def synthetic_bank(media_id, content, event_id, *, routed_media_id=None, stream_type=0):
     routed_media_id = media_id if routed_media_id is None else routed_media_id
     didx = struct.pack("<III", media_id, 0, len(content))
     sound_id = 101
@@ -51,7 +51,7 @@ def synthetic_bank(media_id, content, event_id, *, routed_media_id=None):
     sound = hirc_object(
         0x02,
         sound_id,
-        struct.pack("<IBI", 0x00040001, 0, routed_media_id),
+        struct.pack("<IBI", 0x00040001, stream_type, routed_media_id),
     )
     action = hirc_object(0x03, action_id, struct.pack("<HIB", 0x0403, sound_id, 0))
     event = hirc_object(0x04, event_id, b"\x01" + struct.pack("<I", action_id))
@@ -249,6 +249,61 @@ class PlayableVoiceTest(unittest.TestCase):
             ),
         )
 
+    def test_hashes_full_external_media_for_a_streamed_prefetch(self):
+        with TemporaryDirectory() as temporary_directory:
+            install_root = Path(temporary_directory) / "install"
+            audio_root = install_root / "English"
+            media_root = install_root / "Media"
+            audio_root.mkdir(parents=True)
+            media_root.mkdir()
+            full = b"full streamed voice"
+            (media_root / "42.wem").write_bytes(full)
+            event_id = wwise_event_id("play_voice")
+            bank = audio_root / "voice.bnk"
+            bank.write_bytes(synthetic_bank(42, b"embedded prefetch", event_id, stream_type=1))
+            stat = bank.stat()
+            language = {"name": "Paper Heron", "title": "Voice"}
+            tables = {
+                "json_character": [character_row(3141, "name", "Paper Heron")],
+                "json_character_voice": [voice_row(3141, 1314101, "title", "Hello.#0")],
+                "json_story_audio_role": [[1314101, "play_voice", "voice"]],
+            }
+            index = {
+                "version": index_version,
+                "game_audio_directory": str(audio_root),
+                "banks": [
+                    {
+                        "path": bank.name,
+                        "filename": bank.name,
+                        "size": stat.st_size,
+                        "mtime_ns": stat.st_mtime_ns,
+                        "events": [
+                            {
+                                "event_id": event_id,
+                                "media_ids": [42],
+                                "streamed_media_ids": [42],
+                            }
+                        ],
+                        "embedded_media_ids": [42],
+                    }
+                ],
+            }
+            resolver = StoryAudioResolver(build_audio_registry(tables), index)
+            lines = extract_playable_voice_lines(language, tables, "Paper Heron", resolver)
+
+            bound = bind_playable_voice_provenance(lines, index)
+
+        self.assertEqual(
+            bound[0].media_sha256,
+            (
+                {
+                    "media_id": 42,
+                    "location": "external",
+                    "source_sha256": hashlib.sha256(full).hexdigest(),
+                },
+            ),
+        )
+
     def test_rejects_a_stale_bank_fingerprint(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -355,7 +410,7 @@ class PlayableVoiceTest(unittest.TestCase):
             resolver = StoryAudioResolver(build_audio_registry(tables), index)
             lines = extract_playable_voice_lines(language, tables, "Paper Heron", resolver)
 
-            with self.assertRaisesRegex(PlayableVoiceError, "escapes media root"):
+            with self.assertRaisesRegex(PlayableVoiceError, "missing or unsafe"):
                 bind_playable_voice_provenance(lines, index)
 
     def test_rejects_bank_filename_path_mismatch_before_hashing(self):

@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from r1999extractor import reverse1999_voice_import as importer
-from r1999extractor.wwise import EmbeddedMedia
+from r1999extractor.wwise import EmbeddedMedia, WwiseBankSummary
 
 
 class Reverse1999GameVoiceImportTest(unittest.TestCase):
@@ -172,6 +172,11 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
                 ),
                 patch.object(
                     importer,
+                    "inspect_bank",
+                    return_value=WwiseBankSummary(None, (), (10, 20), 0, None),
+                ),
+                patch.object(
+                    importer,
                     "convert_audio",
                     side_effect=lambda _source, destination, **_options: write_wav(destination),
                 ),
@@ -187,15 +192,78 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
 
         self.assertEqual([reference.media_id for reference in references], [10, 20])
 
+    def test_reviewed_prefetch_media_uses_the_full_external_wem(self):
+        from tests.test_playable_voice import synthetic_bank
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            bank = root / "en/voice.bnk"
+            bank.parent.mkdir()
+            bank.write_bytes(synthetic_bank(42, b"short prefetch", 1, stream_type=1))
+            external = root / "Media/42.wem"
+            external.parent.mkdir()
+            external.write_bytes(b"full external voice")
+            decoded = []
+
+            def convert(source, destination, **_options):
+                decoded.append(Path(source).read_bytes())
+                write_wav(destination)
+
+            with patch.object(importer, "convert_audio", side_effect=convert):
+                references = importer.decode_references(
+                    bank,
+                    root / "pack",
+                    "Tang Ji",
+                    1,
+                    "decoder",
+                    media_ids=[42],
+                )
+
+        self.assertEqual([reference.media_id for reference in references], [42])
+        self.assertEqual(decoded, [b"full external voice"])
+
+    def test_full_media_reader_accepts_routed_external_wem_without_didx(self):
+        def hirc_object(object_type, object_id, payload=b""):
+            body = struct.pack("<I", object_id) + payload
+            return bytes([object_type]) + struct.pack("<I", len(body)) + body
+
+        sound = hirc_object(0x02, 101, struct.pack("<IBI", 0x00040001, 1, 42))
+        action = hirc_object(0x03, 303, struct.pack("<HIB", 0x0403, 101, 0))
+        event = hirc_object(0x04, 404, b"\x01" + struct.pack("<I", 303))
+        hirc = struct.pack("<I", 3) + sound + action + event
+        bank_data = (
+            b"BKHD" + struct.pack("<II", 4, 154) + b"HIRC" + struct.pack("<I", len(hirc)) + hirc
+        )
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            bank = root / "en/voice.bnk"
+            bank.parent.mkdir()
+            bank.write_bytes(bank_data)
+            external = root / "Media/42.wem"
+            external.parent.mkdir()
+            external.write_bytes(b"external-only")
+
+            media = importer.read_full_bank_media(bank, [42])
+
+        self.assertEqual(media, [EmbeddedMedia(42, b"external-only")])
+
     def test_missing_reviewed_media_id_is_rejected(self):
         with TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             bank = directory / "voice.bnk"
             bank.write_bytes(b"bank")
-            with patch.object(
-                importer,
-                "read_embedded_media",
-                return_value=[EmbeddedMedia(10, b"voice")],
+            with (
+                patch.object(
+                    importer,
+                    "read_embedded_media",
+                    return_value=[EmbeddedMedia(10, b"voice")],
+                ),
+                patch.object(
+                    importer,
+                    "inspect_bank",
+                    return_value=WwiseBankSummary(None, (), (10,), 0, None),
+                ),
             ):
                 with self.assertRaisesRegex(importer.GameVoiceImportError, "media ID"):
                     importer.decode_references(
