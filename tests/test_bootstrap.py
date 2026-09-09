@@ -234,7 +234,8 @@ class BootstrapTest(unittest.TestCase):
             (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
             builds = []
 
-            def build(_story, _banks, roles, destination):
+            def build(_story, _banks, roles, destination, *, playable_speech_only=False):
+                self.assertFalse(playable_speech_only)
                 builds.append(tuple(roles))
                 destination.mkdir(parents=True)
                 reference = destination / "references" / "hero.wav"
@@ -315,6 +316,199 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(evidence["variants"][0]["source_voice_ids"], ["play_hero_7"])
         self.assertEqual(evidence["variants"][0]["source_line_ids"], ["line:source"])
         self.assertEqual(evidence["variants"][0]["portrait_image_sha256"], "a" * 64)
+
+    def test_player_candidates_use_playable_catalog_and_invalidate_both_indexes(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "reverse1999"
+            output.mkdir()
+            target = output / "story-index.jsonl"
+            references = output / "narrator-index.jsonl"
+            target.write_text(
+                json.dumps({"record_type": "metadata", "revision": 1}) + "\n",
+                encoding="utf-8",
+            )
+            target_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+            source_line = {
+                "record_type": "line",
+                "line_id": "playable-voice:3141:1314101:0",
+                "speaker": "Centurion",
+                "voice_character": "Centurion",
+                "text": "Hello there welcome friend.",
+                "text_sha256": hashlib.sha256(
+                    b"Hello there welcome friend."
+                ).hexdigest(),
+                "source_audio_status": "available",
+                "source_audio_id": "play_hero3141_mainvoc_1",
+                "source_event": "play_hero3141_mainvoc_1",
+                "source_bank": "hero3141_mainvoc.bnk",
+                "source_media_ids": [42],
+            }
+            references.write_text(
+                json.dumps({"record_type": "metadata", "revision": 1})
+                + "\n"
+                + json.dumps(source_line)
+                + "\n",
+                encoding="utf-8",
+            )
+            (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
+            builds = []
+
+            def build(source, _banks, roles, destination, *, playable_speech_only=False):
+                self.assertTrue(playable_speech_only)
+                lines, _digest = collect_story_voice_lines(source, roles)
+                builds.append((Path(source), tuple(line.line_id for line in lines)))
+                destination.mkdir(parents=True)
+                reference = destination / "references" / "centurion.wav"
+                reference.parent.mkdir()
+                reference.write_bytes(b"voice")
+                report = {
+                    "schema": REPORT_SCHEMA,
+                    "schema_version": REPORT_VERSION,
+                    "story_index": str(Path(source).resolve()),
+                    "story_index_sha256": hashlib.sha256(
+                        Path(source).read_bytes()
+                    ).hexdigest(),
+                    "groups": [
+                        {
+                            "character": "Centurion",
+                            "portrait": None,
+                            "source_bank": "hero3141_mainvoc.bnk",
+                            "recommended_media_ids_for_audition": [42],
+                        }
+                    ],
+                    "candidates": [
+                        {
+                            "character": "Centurion",
+                            "portrait": None,
+                            "source_bank": "hero3141_mainvoc.bnk",
+                            "media_id": 42,
+                            "source_event_ids": [42],
+                            "reference": "references/centurion.wav",
+                            "reference_sha256": hashlib.sha256(b"voice").hexdigest(),
+                            "source_lines": [source_line],
+                            "metrics": {"duration_seconds": 3.0, "quality_score": 100},
+                        }
+                    ],
+                }
+                report_path = destination / "report.json"
+                report_path.write_text(json.dumps(report), encoding="utf-8")
+                return report_path, report
+
+            with (
+                patch(
+                    "r1999extractor.bootstrap.build_story_voice_candidates",
+                    side_effect=build,
+                ),
+                patch("r1999extractor.bootstrap.extract_story_portraits", return_value={}),
+            ):
+                first = prepare_player_voice_candidates(
+                    roles=("Centurion",), data_directory=root
+                )
+                self.assertEqual(
+                    first,
+                    prepare_player_voice_candidates(
+                        roles=("Centurion",), data_directory=root
+                    ),
+                )
+                references.write_text(
+                    json.dumps({"record_type": "metadata", "revision": 2})
+                    + "\n"
+                    + json.dumps(source_line)
+                    + "\n",
+                    encoding="utf-8",
+                )
+                changed_references = prepare_player_voice_candidates(
+                    roles=("Centurion",), data_directory=root
+                )
+                target.write_text(
+                    json.dumps({"record_type": "metadata", "revision": 2}) + "\n",
+                    encoding="utf-8",
+                )
+                changed_target = prepare_player_voice_candidates(
+                    roles=("Centurion",), data_directory=root
+                )
+
+            manifest = json.loads(first.read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest[PLAYER_VOICE_CANDIDATES_FIELD]["story_index_sha256"],
+                target_sha256,
+            )
+            self.assertEqual(
+                builds,
+                [
+                    (references.resolve(), ("playable-voice:3141:1314101:0",)),
+                    (references.resolve(), ("playable-voice:3141:1314101:0",)),
+                    (references.resolve(), ("playable-voice:3141:1314101:0",)),
+                ],
+            )
+            self.assertNotEqual(first, changed_references)
+            self.assertNotEqual(changed_references, changed_target)
+
+    def test_player_candidates_reject_report_bound_to_wrong_reference_catalog(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "reverse1999"
+            output.mkdir()
+            (output / "story-index.jsonl").write_text("{}\n", encoding="utf-8")
+            references = output / "narrator-index.jsonl"
+            references.write_text("{}\n", encoding="utf-8")
+            (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
+
+            def build(source, _banks, _roles, destination, *, playable_speech_only=False):
+                self.assertTrue(playable_speech_only)
+                destination.mkdir(parents=True)
+                report = {
+                    "schema": REPORT_SCHEMA,
+                    "schema_version": REPORT_VERSION,
+                    "story_index": str(Path(source).resolve()),
+                    "story_index_sha256": "0" * 64,
+                    "groups": [],
+                    "candidates": [],
+                }
+                report_path = destination / "report.json"
+                report_path.write_text(json.dumps(report), encoding="utf-8")
+                return report_path, report
+
+            with patch(
+                "r1999extractor.bootstrap.build_story_voice_candidates", side_effect=build
+            ):
+                with self.assertRaisesRegex(BootstrapError, "report story index changed"):
+                    prepare_player_voice_candidates(roles=("Centurion",), data_directory=root)
+
+    def test_player_candidates_reject_reference_catalog_changed_during_build(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "reverse1999"
+            output.mkdir()
+            (output / "story-index.jsonl").write_text("{}\n", encoding="utf-8")
+            references = output / "narrator-index.jsonl"
+            references.write_text("{}\n", encoding="utf-8")
+            (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
+
+            def build(source, _banks, _roles, destination, *, playable_speech_only=False):
+                self.assertTrue(playable_speech_only)
+                Path(source).write_text('{"revision":2}\n', encoding="utf-8")
+                destination.mkdir(parents=True)
+                report = {
+                    "schema": REPORT_SCHEMA,
+                    "schema_version": REPORT_VERSION,
+                    "story_index": str(Path(source).resolve()),
+                    "story_index_sha256": hashlib.sha256(
+                        Path(source).read_bytes()
+                    ).hexdigest(),
+                    "groups": [],
+                    "candidates": [],
+                }
+                report_path = destination / "report.json"
+                report_path.write_text(json.dumps(report), encoding="utf-8")
+                return report_path, report
+
+            with patch(
+                "r1999extractor.bootstrap.build_story_voice_candidates", side_effect=build
+            ):
+                with self.assertRaisesRegex(BootstrapError, "report story index changed"):
+                    prepare_player_voice_candidates(roles=("Centurion",), data_directory=root)
 
 
 if __name__ == "__main__":

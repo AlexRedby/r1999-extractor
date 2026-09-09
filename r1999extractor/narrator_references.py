@@ -13,6 +13,7 @@ from r1999extractor.story_audio import AudioConfiguration, StoryAudioResolver, w
 from r1999extractor.story_voice_candidates import (
     StoryVoiceCandidateError,
     collect_story_voice_lines,
+    is_playable_main_voice_reference,
     snapshot_bank,
 )
 from r1999extractor.wwise import resolve_decoder
@@ -36,8 +37,7 @@ def list_narrator_references(story_index, role):
         lines = [
             line
             for line in playable
-            if Path(line.source_bank).stem.startswith("mianvoc_hero")
-            or Path(line.source_bank).stem.endswith("_mainvoc")
+            if is_playable_main_voice_reference(line.line_id, line.source_bank)
         ]
     elif normalize_character_name(role) in {
         normalize_character_name(name)

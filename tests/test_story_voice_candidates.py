@@ -131,6 +131,115 @@ class StoryVoiceCandidateTest(unittest.TestCase):
             with self.assertRaisesRegex(StoryVoiceCandidateError, "Missing"):
                 collect_story_voice_lines(story, ["Missing"])
 
+    def test_playable_speech_filter_excludes_combat_without_losing_story_variants(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            lines = [
+                {
+                    **story_line(1, "Story voice remains available."),
+                    "source_audio_id": "1001",
+                    "source_event": "play_story",
+                    "source_bank": "hero_story.bnk",
+                    "source_media_ids": [10],
+                },
+                {
+                    **story_line(2, "Playable greeting remains available."),
+                    "line_id": "playable-voice:3141:100:0",
+                    "source_audio_id": "1002",
+                    "source_event": "play_main",
+                    "source_bank": "mianvoc_hero3141.bnk",
+                    "source_media_ids": [11],
+                },
+                {
+                    **story_line(3, "Combat clip is not a reference."),
+                    "line_id": "playable-voice:3141:101:1",
+                    "source_audio_id": "1003",
+                    "source_event": "play_combat",
+                    "source_bank": "hero3141_combat.bnk",
+                    "source_media_ids": [12],
+                },
+            ]
+            story = write_story(root / "story.jsonl", lines)
+            snapshots = {}
+            banks = []
+            for line in lines:
+                bank = root / line["source_bank"]
+                payload = line["source_audio_id"].encode()
+                bank.write_bytes(payload)
+                stat = bank.stat()
+                banks.append(
+                    {
+                        "filename": bank.name,
+                        "path": bank.name,
+                        "size": stat.st_size,
+                        "mtime_ns": stat.st_mtime_ns,
+                        "embedded_media_ids": line["source_media_ids"],
+                        "events": [
+                            {
+                                "event_id": wwise_event_id(line["source_event"]),
+                                "media_ids": line["source_media_ids"],
+                            }
+                        ],
+                    }
+                )
+                snapshots[bank.name] = BankSnapshot(
+                    path=bank,
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    media={line["source_media_ids"][0]: payload},
+                    routes={
+                        wwise_event_id(line["source_event"]): tuple(
+                            line["source_media_ids"]
+                        )
+                    },
+                )
+            bank_index = root / "banks.json"
+            bank_index.write_text(
+                json.dumps(
+                    {
+                        "version": index_version,
+                        "game_audio_directory": str(root),
+                        "bank_count": len(banks),
+                        "banks": banks,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            decoded_banks = []
+
+            def decode(data, output, media_id, _decoder, *, bank=None):
+                decoded_banks.append(bank)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(data)
+                return ImportedReference(
+                    output,
+                    media_id,
+                    hashlib.sha256(data).hexdigest(),
+                    hashlib.sha256(data).hexdigest(),
+                    bank,
+                )
+
+            _path, report = build_story_voice_candidates(
+                story,
+                bank_index,
+                ["Hero"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, name: snapshots[name],
+                media_decoder=decode,
+                analyzer=clean_metrics,
+                playable_speech_only=True,
+            )
+
+        self.assertEqual(
+            {
+                line["line_id"]
+                for candidate in report["candidates"]
+                for line in candidate["source_lines"]
+            },
+            {"reverse1999:story:1", "playable-voice:3141:100:0"},
+        )
+        self.assertNotIn("hero3141_combat.bnk", decoded_banks)
+
     def test_counts_only_missing_source_speakable_lines_by_exact_portrait(self):
         with TemporaryDirectory() as directory:
             story = write_story(

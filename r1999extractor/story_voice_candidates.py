@@ -202,6 +202,14 @@ def collect_story_voice_lines(story_index, roles):
     return tuple(lines), hashlib.sha256(payload).hexdigest()
 
 
+def is_playable_main_voice_reference(line_id, source_bank):
+    """Return whether a playable catalog line is from its spoken main-voice bank."""
+    if not isinstance(line_id, str) or not line_id.startswith("playable-voice:"):
+        return False
+    bank = Path(str(source_bank or "")).stem
+    return bank.startswith("mianvoc_hero") or bank.endswith("_mainvoc")
+
+
 def affected_story_line_counts(story_index, roles):
     """Count missing-source speakable lines by exact role and portrait."""
     requested = {
@@ -303,11 +311,21 @@ def build_story_voice_candidates(
     media_decoder=decode_reference_data,
     analyzer=analyze_voice_reference,
     include_all_bank_media=False,
+    playable_speech_only=False,
 ):
     """Publish a non-authoritative audition set without changing a voice manifest."""
     story_index = resolve_story_index_path(story_index)
     bank_index_path = Path(bank_index_path).expanduser().resolve()
     lines, story_sha256 = collect_story_voice_lines(story_index, roles)
+    if playable_speech_only:
+        lines = tuple(
+            line
+            for line in lines
+            if not line.line_id.startswith("playable-voice:")
+            or is_playable_main_voice_reference(line.line_id, line.source_bank)
+        )
+        if not lines:
+            raise StoryVoiceCandidateError("No playable speech references are available")
     character_affected, portrait_affected = affected_story_line_counts(story_index, roles)
     try:
         bank_index_payload = bank_index_path.read_bytes()

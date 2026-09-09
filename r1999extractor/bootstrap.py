@@ -95,16 +95,25 @@ def prepare_player_voice_candidates(
     output = (
         Path(data_directory or get_local_data_directory()).expanduser().resolve() / "reverse1999"
     )
-    story_index = output / ("narrator-index.jsonl" if narrator else "story-index.jsonl")
+    target_story_index = output / "story-index.jsonl"
+    reference_story_index = output / "narrator-index.jsonl"
     bank_index = output / "english-bank-index.json"
-    if not story_index.is_file() or not bank_index.is_file():
+    if narrator:
+        required_indexes = (reference_story_index,)
+        use_playable_speech_only = False
+    else:
+        use_playable_speech_only = reference_story_index.is_file()
+        if not use_playable_speech_only:
+            reference_story_index = target_story_index
+        required_indexes = (target_story_index, reference_story_index)
+    if not all(path.is_file() for path in required_indexes) or not bank_index.is_file():
         raise BootstrapError("Import the installed game before preparing character voices")
     if narrator:
         if len(roles) != 1:
             raise BootstrapError("Choose one narrator character at a time")
         try:
             return prepare_narrator_references(
-                story_index,
+                reference_story_index,
                 bank_index,
                 roles[0],
                 output / "voice-candidates",
@@ -112,11 +121,14 @@ def prepare_player_voice_candidates(
             )
         except (OSError, RuntimeError, ValueError) as error:
             raise BootstrapError(f"Unable to prepare narrator speech: {error}") from error
-    story_sha256 = sha256_file(story_index)
+    target_story_sha256 = sha256_file(target_story_index)
+    reference_story_sha256 = sha256_file(reference_story_index)
     identity = hashlib.sha256(
         json.dumps(
             {
-                "story_index_sha256": story_sha256,
+                "target_story_index_sha256": target_story_sha256,
+                "reference_story_index_sha256": reference_story_sha256,
+                "playable_speech_only": use_playable_speech_only,
                 "reference_decode_version": REFERENCE_DECODE_VERSION,
                 "bank_index_sha256": sha256_file(bank_index),
                 "roles": [normalize_character_name(role) for role in roles],
@@ -133,7 +145,7 @@ def prepare_player_voice_candidates(
             manifest, _entries = load_voice_manifest(manifest_path, allow_legacy=False)
             evidence = manifest.get(PLAYER_VOICE_CANDIDATES_FIELD, {})
             if (
-                evidence.get("story_index_sha256") == story_sha256
+                evidence.get("story_index_sha256") == target_story_sha256
                 and evidence.get("schema_version") == PLAYER_VOICE_CANDIDATES_VERSION
             ):
                 return manifest_path
@@ -144,29 +156,45 @@ def prepare_player_voice_candidates(
             report = json.loads(report_path.read_text(encoding="utf-8"))
         else:
             report_path, report = build_story_voice_candidates(
-                story_index,
+                reference_story_index,
                 bank_index,
                 roles,
                 directory,
+                playable_speech_only=use_playable_speech_only,
             )
         return _publish_player_voice_manifest(
             report_path,
             report,
             manifest_path,
-            story_index,
+            reference_story_index,
+            target_story_index,
+            reference_story_sha256,
+            target_story_sha256,
         )
     except (OSError, RuntimeError, ValueError) as error:
         raise BootstrapError(f"Unable to prepare character voice candidates: {error}") from error
 
 
-def _publish_player_voice_manifest(report_path, report, manifest_path, story_index):
-    story_index = Path(story_index).resolve()
+def _publish_player_voice_manifest(
+    report_path,
+    report,
+    manifest_path,
+    reference_story_index,
+    target_story_index,
+    reference_story_sha256,
+    target_story_sha256,
+):
+    reference_story_index = Path(reference_story_index).resolve()
+    target_story_index = Path(target_story_index).resolve()
     if (
         not isinstance(report, dict)
         or report.get("schema") != REPORT_SCHEMA
         or report.get("schema_version") not in SUPPORTED_REPORT_VERSIONS
-        or Path(report.get("story_index", "")).expanduser().resolve() != story_index
-        or report.get("story_index_sha256") != sha256_file(story_index)
+        or Path(report.get("story_index", "")).expanduser().resolve()
+        != reference_story_index
+        or report.get("story_index_sha256") != reference_story_sha256
+        or sha256_file(reference_story_index) != reference_story_sha256
+        or sha256_file(target_story_index) != target_story_sha256
     ):
         raise BootstrapError("Voice candidate report story index changed")
     recommended = {
@@ -181,7 +209,7 @@ def _publish_player_voice_manifest(report_path, report, manifest_path, story_ind
         for media_id in group.get("recommended_media_ids_for_audition", ())
     }
     portrait_hashes = _prepare_player_portraits(
-        story_index,
+        reference_story_index,
         {
             candidate.get("portrait")
             for candidate in report.get("candidates", ())
@@ -270,7 +298,7 @@ def _publish_player_voice_manifest(report_path, report, manifest_path, story_ind
         PLAYER_VOICE_CANDIDATES_FIELD: {
             "schema": PLAYER_VOICE_CANDIDATES_SCHEMA,
             "schema_version": PLAYER_VOICE_CANDIDATES_VERSION,
-            "story_index_sha256": report["story_index_sha256"],
+            "story_index_sha256": target_story_sha256,
             "candidate_report": report_path.name,
             "candidate_report_sha256": report_sha256,
             "variants": variants,
