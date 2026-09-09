@@ -143,7 +143,9 @@ def find_game_audio_directory(home=None, environment=None, *, logger=None):
                 logged_candidates += 1
             if has_banks:
                 if logger is not None and logger.isEnabledFor(logging.INFO):
-                    logger.info("Selected English audio directory: %s (Wwise bank found)", candidate)
+                    logger.info(
+                        "Selected English audio directory: %s (Wwise bank found)", candidate
+                    )
                 return candidate.resolve()
     if logger is not None and logger.isEnabledFor(logging.INFO):
         if len(roots) > _MAX_AUDIO_DISCOVERY_LOG_PATHS:
@@ -151,7 +153,9 @@ def find_game_audio_directory(home=None, environment=None, *, logger=None):
                 "English audio root probes: %d additional roots omitted",
                 len(roots) - _MAX_AUDIO_DISCOVERY_LOG_PATHS,
             )
-        logger.info("No installed English game audio directory: checked %d resource roots", len(roots))
+        logger.info(
+            "No installed English game audio directory: checked %d resource roots", len(roots)
+        )
     return None
 
 

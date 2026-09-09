@@ -163,7 +163,9 @@ def game_resource_roots(home=None, environment=None, *, logger=None, include_mis
             library_text = library_folders.read_text(encoding="utf-8")
         except OSError as error:
             if logger is not None and logger.isEnabledFor(logging.INFO):
-                logger.info("Steam library list unavailable: %s (%s)", library_folders, type(error).__name__)
+                logger.info(
+                    "Steam library list unavailable: %s (%s)", library_folders, type(error).__name__
+                )
         else:
             discovered_libraries = tuple(
                 Path(value.replace("\\\\", "\\"))
@@ -189,7 +191,9 @@ def game_resource_roots(home=None, environment=None, *, logger=None, include_mis
                 manifest_text = manifest.read_text(encoding="utf-8")
             except OSError as error:
                 if log_manifest:
-                    logger.info("Steam manifest unavailable: %s (%s)", manifest, type(error).__name__)
+                    logger.info(
+                        "Steam manifest unavailable: %s (%s)", manifest, type(error).__name__
+                    )
                 continue
             match = re.search(r'"installdir"\s+"([^"]+)"', manifest_text)
             if match:
@@ -203,7 +207,11 @@ def game_resource_roots(home=None, environment=None, *, logger=None, include_mis
                     / "reverse1999_Data"
                     / "StreamingAssets"
                 )
-        if logger is not None and logger.isEnabledFor(logging.INFO) and len(libraries) > _MAX_DISCOVERY_LOG_PATHS:
+        if (
+            logger is not None
+            and logger.isEnabledFor(logging.INFO)
+            and len(libraries) > _MAX_DISCOVERY_LOG_PATHS
+        ):
             logger.info(
                 "Steam manifest probes: %d additional libraries omitted",
                 len(libraries) - _MAX_DISCOVERY_LOG_PATHS,
@@ -231,7 +239,11 @@ def find_game_config_directory(home=None, environment=None, *, logger=None):
         language_config = candidate / "language" / "json_language_en.json.dat"
         data_exists = data_config.is_file()
         language_exists = language_config.is_file()
-        if logger is not None and logger.isEnabledFor(logging.INFO) and index < _MAX_DISCOVERY_LOG_PATHS:
+        if (
+            logger is not None
+            and logger.isEnabledFor(logging.INFO)
+            and index < _MAX_DISCOVERY_LOG_PATHS
+        ):
             logger.info(
                 "Config probe: %s (datacfg_1.dat=%s, json_language_en.json.dat=%s)",
                 candidate,
@@ -244,7 +256,10 @@ def find_game_config_directory(home=None, environment=None, *, logger=None):
             return candidate.resolve()
     if logger is not None and logger.isEnabledFor(logging.INFO):
         if len(roots) > _MAX_DISCOVERY_LOG_PATHS:
-            logger.info("Config probes: %d additional candidate roots omitted", len(roots) - _MAX_DISCOVERY_LOG_PATHS)
+            logger.info(
+                "Config probes: %d additional candidate roots omitted",
+                len(roots) - _MAX_DISCOVERY_LOG_PATHS,
+            )
         logger.info(
             "No usable config directory: checked %d roots; requires datacfg_1.dat and "
             "language/json_language_en.json.dat",

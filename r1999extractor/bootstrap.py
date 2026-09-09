@@ -336,7 +336,9 @@ def bootstrap_local_artifacts(
             discovery_logger.info("Bootstrap English audio directory: automatic discovery")
         game_audio_directory = find_game_audio_directory(logger=discovery_logger)
     elif discovery_logger is not None:
-        discovery_logger.info("Bootstrap English audio directory: supplied %s", game_audio_directory)
+        discovery_logger.info(
+            "Bootstrap English audio directory: supplied %s", game_audio_directory
+        )
     if game_audio_directory is None:
         raise BootstrapError("Unable to find installed English game audio")
     if discovery_logger is not None:

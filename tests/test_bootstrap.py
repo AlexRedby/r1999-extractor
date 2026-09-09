@@ -124,7 +124,10 @@ class BootstrapTest(unittest.TestCase):
 
             with (
                 patch("r1999extractor.bootstrap.find_game_config_directory", discover_config),
-                patch("r1999extractor.reverse1999_config.packaged_macos_resource_roots", return_value=()),
+                patch(
+                    "r1999extractor.reverse1999_config.packaged_macos_resource_roots",
+                    return_value=(),
+                ),
                 redirect_stdout(stdout),
                 redirect_stderr(stderr),
             ):
