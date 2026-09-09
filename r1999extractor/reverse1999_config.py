@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 import re
 import sys
@@ -19,10 +20,21 @@ config_key = b"@_#*&Reverse2806" + b" " * 16
 config_iv = b"!_#@2022_Skyfly)"
 index_version = 1
 default_output = get_local_data_directory() / "reverse1999" / "dialogue-index.json"
+_MAX_DISCOVERY_LOG_PATHS = 20
 
 
 class Reverse1999ConfigError(RuntimeError):
     pass
+
+
+def _log_paths(logger, label, paths):
+    if logger is None or not logger.isEnabledFor(logging.INFO):
+        return
+    paths = tuple(paths)
+    for path in paths[:_MAX_DISCOVERY_LOG_PATHS]:
+        logger.info("%s: %s (exists=%s)", label, path, path.is_dir())
+    if len(paths) > _MAX_DISCOVERY_LOG_PATHS:
+        logger.info("%s: %d additional paths omitted", label, len(paths) - _MAX_DISCOVERY_LOG_PATHS)
 
 
 @dataclass(frozen=True)
@@ -120,7 +132,7 @@ def packaged_macos_resource_roots(home=None):
     )
 
 
-def game_resource_roots(home=None, environment=None):
+def game_resource_roots(home=None, environment=None, *, logger=None, include_missing=False):
     """Return known installed platform roots without scanning whole drives."""
     home = Path.home() if home is None else Path(home)
     environment = os.environ if environment is None else environment
@@ -143,26 +155,46 @@ def game_resource_roots(home=None, environment=None):
     if environment.get("STEAM_PATH"):
         steam_roots.insert(0, Path(environment["STEAM_PATH"]))
     for steam_root in steam_roots:
+        if logger is not None and logger.isEnabledFor(logging.INFO):
+            logger.info("Steam root probe: %s (exists=%s)", steam_root, steam_root.is_dir())
         libraries = [steam_root]
+        library_folders = steam_root / "steamapps" / "libraryfolders.vdf"
         try:
-            library_text = (steam_root / "steamapps" / "libraryfolders.vdf").read_text(
-                encoding="utf-8"
-            )
-        except OSError:
-            pass
+            library_text = library_folders.read_text(encoding="utf-8")
+        except OSError as error:
+            if logger is not None and logger.isEnabledFor(logging.INFO):
+                logger.info("Steam library list unavailable: %s (%s)", library_folders, type(error).__name__)
         else:
-            libraries.extend(
+            discovered_libraries = tuple(
                 Path(value.replace("\\\\", "\\"))
                 for value in re.findall(r'"path"\s+"([^"]+)"', library_text)
             )
-        for library in libraries:
+            libraries.extend(discovered_libraries)
+            if logger is not None and logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    "Steam library list read: %s (parsed_libraries=%d)",
+                    library_folders,
+                    len(discovered_libraries),
+                )
+        for index, library in enumerate(libraries):
             manifest = library / "steamapps" / "appmanifest_3092660.acf"
+            log_manifest = (
+                logger is not None
+                and logger.isEnabledFor(logging.INFO)
+                and index < _MAX_DISCOVERY_LOG_PATHS
+            )
+            if log_manifest:
+                logger.info("Steam manifest probe: %s (exists=%s)", manifest, manifest.is_file())
             try:
                 manifest_text = manifest.read_text(encoding="utf-8")
-            except OSError:
+            except OSError as error:
+                if log_manifest:
+                    logger.info("Steam manifest unavailable: %s (%s)", manifest, type(error).__name__)
                 continue
             match = re.search(r'"installdir"\s+"([^"]+)"', manifest_text)
             if match:
+                if logger is not None and logger.isEnabledFor(logging.INFO):
+                    logger.info("Steam manifest recognized: %s", manifest)
                 streaming_roots.append(
                     library
                     / "steamapps"
@@ -171,27 +203,53 @@ def game_resource_roots(home=None, environment=None):
                     / "reverse1999_Data"
                     / "StreamingAssets"
                 )
+        if logger is not None and logger.isEnabledFor(logging.INFO) and len(libraries) > _MAX_DISCOVERY_LOG_PATHS:
+            logger.info(
+                "Steam manifest probes: %d additional libraries omitted",
+                len(libraries) - _MAX_DISCOVERY_LOG_PATHS,
+            )
     for streaming_root in streaming_roots:
         candidates.extend((streaming_root / "PersistentRoot", streaming_root / "Windows"))
     candidates.extend(packaged_macos_resource_roots(home))
+    _log_paths(logger, "Resource root probe", candidates)
 
     unique = []
     seen = set()
     for candidate in candidates:
         candidate = candidate.resolve()
-        if candidate not in seen and candidate.is_dir():
+        if candidate not in seen and (include_missing or candidate.is_dir()):
             seen.add(candidate)
             unique.append(candidate)
     return tuple(unique)
 
 
-def find_game_config_directory(home=None, environment=None):
-    for root in game_resource_roots(home, environment):
+def find_game_config_directory(home=None, environment=None, *, logger=None):
+    roots = game_resource_roots(home, environment, logger=logger, include_missing=True)
+    for index, root in enumerate(roots):
         candidate = root / "configs"
-        if (candidate / "datacfg_1.dat").is_file() and (
-            candidate / "language" / "json_language_en.json.dat"
-        ).is_file():
+        data_config = candidate / "datacfg_1.dat"
+        language_config = candidate / "language" / "json_language_en.json.dat"
+        data_exists = data_config.is_file()
+        language_exists = language_config.is_file()
+        if logger is not None and logger.isEnabledFor(logging.INFO) and index < _MAX_DISCOVERY_LOG_PATHS:
+            logger.info(
+                "Config probe: %s (datacfg_1.dat=%s, json_language_en.json.dat=%s)",
+                candidate,
+                data_exists,
+                language_exists,
+            )
+        if data_exists and language_exists:
+            if logger is not None and logger.isEnabledFor(logging.INFO):
+                logger.info("Selected config directory: %s (required files found)", candidate)
             return candidate.resolve()
+    if logger is not None and logger.isEnabledFor(logging.INFO):
+        if len(roots) > _MAX_DISCOVERY_LOG_PATHS:
+            logger.info("Config probes: %d additional candidate roots omitted", len(roots) - _MAX_DISCOVERY_LOG_PATHS)
+        logger.info(
+            "No usable config directory: checked %d roots; requires datacfg_1.dat and "
+            "language/json_language_en.json.dat",
+            len(roots),
+        )
     return None
 
 

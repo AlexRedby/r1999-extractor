@@ -1,6 +1,8 @@
 import hashlib
+import io
 import json
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -96,6 +98,46 @@ class BootstrapTest(unittest.TestCase):
         ):
             bootstrap_local_artifacts()
 
+    def test_cli_reports_missing_config_probes_on_stderr_only(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            program_files = root / "Program Files (x86)"
+            platform = (
+                program_files
+                / "reverse1999_global"
+                / "Reverse1999en"
+                / "reverse1999_Data"
+                / "StreamingAssets"
+                / "PersistentRoot"
+            )
+            stderr = io.StringIO()
+            stdout = io.StringIO()
+
+            def discover_config(*, logger=None):
+                from r1999extractor.reverse1999_config import find_game_config_directory
+
+                return find_game_config_directory(
+                    root / "Users" / "player",
+                    {"ProgramFiles(x86)": str(program_files)},
+                    logger=logger,
+                )
+
+            with (
+                patch("r1999extractor.bootstrap.find_game_config_directory", discover_config),
+                patch("r1999extractor.reverse1999_config.packaged_macos_resource_roots", return_value=()),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                self.assertEqual(main(["--data-directory", str(root / "output")]), 1)
+
+        diagnostics = stderr.getvalue()
+        config_path = platform / "configs"
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn(str(config_path), diagnostics)
+        self.assertIn("datacfg_1.dat=False", diagnostics)
+        self.assertIn("json_language_en.json.dat=False", diagnostics)
+        self.assertTrue(diagnostics.rstrip().endswith("Unable to find installed game configs"))
+
     def test_uses_local_output_directory_for_every_artifact(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -144,14 +186,18 @@ class BootstrapTest(unittest.TestCase):
             "source_audit": Path("audit.json"),
             "story_line_count": 7,
         }
+        stderr = io.StringIO()
+        stdout = io.StringIO()
         with (
             patch("r1999extractor.bootstrap.bootstrap_local_artifacts", return_value=result),
-            patch("builtins.print") as output,
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
         ):
             exit_code = main([])
 
         self.assertEqual(exit_code, 0)
-        output.assert_called_once_with("Built 7 story lines and source artifacts")
+        self.assertEqual(stdout.getvalue(), "Built 7 story lines and source artifacts\n")
+        self.assertNotIn("Unable to find", stderr.getvalue())
 
     def test_prepares_and_reuses_player_voice_candidate_manifest(self):
         with TemporaryDirectory() as directory:

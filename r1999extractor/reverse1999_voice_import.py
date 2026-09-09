@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import logging
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -117,11 +118,40 @@ def create_parser():
     return parser
 
 
-def find_game_audio_directory(home=None, environment=None):
-    for root in game_resource_roots(home, environment):
-        for candidate in sorted((root / "audios").glob("*/en")):
-            if candidate.is_dir() and any(candidate.glob("*.bnk")):
+_MAX_AUDIO_DISCOVERY_LOG_PATHS = 20
+
+
+def find_game_audio_directory(home=None, environment=None, *, logger=None):
+    roots = game_resource_roots(home, environment, logger=logger, include_missing=True)
+    logged_candidates = 0
+    for index, root in enumerate(roots):
+        audio_root = root / "audios"
+        if (
+            logger is not None
+            and logger.isEnabledFor(logging.INFO)
+            and index < _MAX_AUDIO_DISCOVERY_LOG_PATHS
+        ):
+            logger.info("English audio root probe: %s (exists=%s)", audio_root, audio_root.is_dir())
+        for candidate in sorted(audio_root.glob("*/en")):
+            has_banks = candidate.is_dir() and any(candidate.glob("*.bnk"))
+            if (
+                logger is not None
+                and logger.isEnabledFor(logging.INFO)
+                and logged_candidates < _MAX_AUDIO_DISCOVERY_LOG_PATHS
+            ):
+                logger.info("English audio probe: %s (Wwise banks=%s)", candidate, has_banks)
+                logged_candidates += 1
+            if has_banks:
+                if logger is not None and logger.isEnabledFor(logging.INFO):
+                    logger.info("Selected English audio directory: %s (Wwise bank found)", candidate)
                 return candidate.resolve()
+    if logger is not None and logger.isEnabledFor(logging.INFO):
+        if len(roots) > _MAX_AUDIO_DISCOVERY_LOG_PATHS:
+            logger.info(
+                "English audio root probes: %d additional roots omitted",
+                len(roots) - _MAX_AUDIO_DISCOVERY_LOG_PATHS,
+            )
+        logger.info("No installed English game audio directory: checked %d resource roots", len(roots))
     return None
 
 

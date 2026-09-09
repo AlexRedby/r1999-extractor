@@ -1,6 +1,8 @@
 import argparse
 import hashlib
 import json
+import logging
+from contextlib import contextmanager
 from pathlib import Path
 
 from vntts_artifacts.atomic_io import atomic_write_json
@@ -11,6 +13,7 @@ from vntts_artifacts.voice_manifest import (
     write_voice_manifest,
 )
 
+import r1999extractor
 from r1999extractor.cli import cli_error
 from r1999extractor.narrator_references import prepare_narrator_references
 from r1999extractor.playable_voice import extract_playable_voice_lines
@@ -25,7 +28,7 @@ from r1999extractor.reverse1999_config import (
     find_game_config_directory,
     load_config_directory,
 )
-from r1999extractor.reverse1999_index import build_bank_index
+from r1999extractor.reverse1999_index import build_bank_index, index_version
 from r1999extractor.reverse1999_voice_import import (
     REFERENCE_DECODE_VERSION,
     find_game_audio_directory,
@@ -51,10 +54,30 @@ from r1999extractor.structured_story import audit_story_like_tables
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
 PLAYER_VOICE_CANDIDATES_VERSION = 2
+DISCOVERY_LOGGER_NAME = "r1999extractor.discovery"
 
 
 class BootstrapError(RuntimeError):
     pass
+
+
+@contextmanager
+def _bootstrap_discovery_logging():
+    logger = logging.getLogger(DISCOVERY_LOGGER_NAME)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.addHandler(handler)
+    try:
+        yield logger
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
 
 
 def prepare_player_voice_candidates(
@@ -294,18 +317,34 @@ def bootstrap_local_artifacts(
     overlay_path=None,
     game_version="installed",
     progress=None,
+    discovery_logger=None,
 ):
     progress = progress or (lambda _message: None)
     data_directory = Path(data_directory or get_local_data_directory()).expanduser().resolve()
     output = data_directory / "reverse1999"
     output.mkdir(parents=True, exist_ok=True)
-    config_directory = config_directory or find_game_config_directory()
+    if config_directory is None:
+        if discovery_logger is not None:
+            discovery_logger.info("Bootstrap config directory: automatic discovery")
+        config_directory = find_game_config_directory(logger=discovery_logger)
+    elif discovery_logger is not None:
+        discovery_logger.info("Bootstrap config directory: supplied %s", config_directory)
     if config_directory is None:
         raise BootstrapError("Unable to find installed game configs")
-    game_audio_directory = game_audio_directory or find_game_audio_directory()
+    if game_audio_directory is None:
+        if discovery_logger is not None:
+            discovery_logger.info("Bootstrap English audio directory: automatic discovery")
+        game_audio_directory = find_game_audio_directory(logger=discovery_logger)
+    elif discovery_logger is not None:
+        discovery_logger.info("Bootstrap English audio directory: supplied %s", game_audio_directory)
     if game_audio_directory is None:
         raise BootstrapError("Unable to find installed English game audio")
-    bundle = find_story_bundle(resource_root)
+    if discovery_logger is not None:
+        discovery_logger.info(
+            "Bootstrap story resource root: %s",
+            "automatic discovery" if resource_root is None else resource_root,
+        )
+    bundle = find_story_bundle(resource_root, logger=discovery_logger)
     if bundle is None:
         raise BootstrapError("Unable to find installed story bundle")
 
@@ -417,30 +456,37 @@ def create_parser():
 
 
 def main(arguments=None):
-    options = create_parser().parse_args(arguments)
-    try:
-        if options.prepare_voice_candidates_only:
-            manifest = prepare_player_voice_candidates(
-                roles=options.voice_candidate_role,
-                data_directory=options.data_directory,
-                narrator=options.narrator,
-                narrator_line_id=options.narrator_line_id,
-            )
-            print(json.dumps({"voice_manifest": str(manifest)}, sort_keys=True))
-            return 0
-        result = bootstrap_local_artifacts(
-            resource_root=options.resource_root,
-            config_directory=options.config_directory,
-            game_audio_directory=options.game_audio_directory,
-            data_directory=options.data_directory,
-            overlay_path=options.overlay,
-            game_version=options.game_version,
-            progress=lambda message: print(message),
+    with _bootstrap_discovery_logging() as discovery_logger:
+        options = create_parser().parse_args(arguments)
+        discovery_logger.info(
+            "Bootstrap CLI start: package=%s bank_index_version=%s",
+            r1999extractor.__file__,
+            index_version,
         )
-    except (BootstrapError, OSError, ValueError) as error:
-        return cli_error(error)
-    print(f"Built {result['story_line_count']} story lines and source artifacts")
-    return 0
+        try:
+            if options.prepare_voice_candidates_only:
+                manifest = prepare_player_voice_candidates(
+                    roles=options.voice_candidate_role,
+                    data_directory=options.data_directory,
+                    narrator=options.narrator,
+                    narrator_line_id=options.narrator_line_id,
+                )
+                print(json.dumps({"voice_manifest": str(manifest)}, sort_keys=True))
+                return 0
+            result = bootstrap_local_artifacts(
+                resource_root=options.resource_root,
+                config_directory=options.config_directory,
+                game_audio_directory=options.game_audio_directory,
+                data_directory=options.data_directory,
+                overlay_path=options.overlay,
+                game_version=options.game_version,
+                progress=lambda message: print(message),
+                discovery_logger=discovery_logger,
+            )
+        except (BootstrapError, OSError, ValueError) as error:
+            return cli_error(error)
+        print(f"Built {result['story_line_count']} story lines and source artifacts")
+        return 0
 
 
 if __name__ == "__main__":

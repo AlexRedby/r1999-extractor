@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import logging
 import re
 import sys
 from collections import Counter, defaultdict
@@ -41,6 +42,7 @@ from r1999extractor.story_audio import (
 story_asset_name = "configs/story"
 story_bundle_filename = f"{hashlib.md5(story_asset_name.encode()).hexdigest()}.dat"
 default_output = get_local_data_directory() / "reverse1999" / "story-index.jsonl"
+_MAX_STORY_DISCOVERY_LOG_PATHS = 20
 rich_text_pattern = re.compile(r"<[^>]*>")
 latin_pattern = re.compile(r"[A-Za-z]")
 cjk_pattern = re.compile(r"[\u3400-\u9fff]")
@@ -640,23 +642,49 @@ def enrich_story_sources(lines, language, tables, *, include_non_speakable=False
     return annotated + hero_lines + structured_lines
 
 
-def find_game_resource_root(home=None, environment=None):
-    for candidate in game_resource_roots(home, environment):
-        if (candidate / "bundles" / story_bundle_filename).is_file():
+def find_game_resource_root(home=None, environment=None, *, logger=None):
+    roots = game_resource_roots(home, environment, logger=logger, include_missing=True)
+    for index, candidate in enumerate(roots):
+        bundle = candidate / "bundles" / story_bundle_filename
+        if (
+            logger is not None
+            and logger.isEnabledFor(logging.INFO)
+            and index < _MAX_STORY_DISCOVERY_LOG_PATHS
+        ):
+            logger.info("Story bundle probe: %s (exists=%s)", bundle, bundle.is_file())
+        if bundle.is_file():
+            if logger is not None and logger.isEnabledFor(logging.INFO):
+                logger.info("Selected story resource root: %s (story bundle found)", candidate)
             return candidate.resolve()
+    if logger is not None and logger.isEnabledFor(logging.INFO):
+        if len(roots) > _MAX_STORY_DISCOVERY_LOG_PATHS:
+            logger.info(
+                "Story bundle probes: %d additional candidate roots omitted",
+                len(roots) - _MAX_STORY_DISCOVERY_LOG_PATHS,
+            )
+        logger.info("No installed story resource root: checked %d roots", len(roots))
     return None
 
 
-def find_story_bundle(resource_root=None):
+def find_story_bundle(resource_root=None, *, logger=None):
     root = (
-        find_game_resource_root()
+        find_game_resource_root(logger=logger)
         if resource_root is None
         else Path(resource_root).expanduser().resolve()
     )
     if root is None:
         return None
     candidate = root / "bundles" / story_bundle_filename
-    return candidate if candidate.is_file() else None
+    exists = candidate.is_file()
+    if logger is not None and logger.isEnabledFor(logging.INFO):
+        logger.info("Story bundle selection probe: %s (exists=%s)", candidate, exists)
+    if exists:
+        if logger is not None and logger.isEnabledFor(logging.INFO):
+            logger.info("Selected story bundle: %s", candidate)
+        return candidate
+    if logger is not None and logger.isEnabledFor(logging.INFO):
+        logger.info("No usable story bundle at selected root: %s", root)
+    return None
 
 
 def _load_unity_environment(path):
