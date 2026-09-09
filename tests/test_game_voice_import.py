@@ -11,6 +11,14 @@ from r1999extractor.wwise import EmbeddedMedia, WwiseBankSummary
 
 
 class Reverse1999GameVoiceImportTest(unittest.TestCase):
+    def setUp(self):
+        registry = patch(
+            "r1999extractor.reverse1999_config._windows_registry_install_locations",
+            return_value=((), ()),
+        )
+        registry.start()
+        self.addCleanup(registry.stop)
+
     def test_finds_windows_english_audio_under_local_app_data(self):
         with TemporaryDirectory() as temporary_directory:
             local_app_data = Path(temporary_directory) / "LocalAppData"

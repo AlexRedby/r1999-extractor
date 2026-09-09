@@ -132,6 +132,96 @@ def packaged_macos_resource_roots(home=None):
     )
 
 
+def _windows_registry_install_locations(logger=None):
+    """Return Steam roots and official-game locations recorded by Windows."""
+    if sys.platform != "win32":
+        return (), ()
+    try:
+        import winreg
+    except ImportError:
+        return (), ()
+
+    def value(key, name):
+        try:
+            candidate, _ = winreg.QueryValueEx(key, name)
+        except OSError:
+            return None
+        return candidate.strip() if isinstance(candidate, str) and candidate.strip() else None
+
+    def location(candidate):
+        path = Path(candidate)
+        return path if path.is_absolute() else None
+
+    def open_key(hive, path):
+        try:
+            return winreg.OpenKey(hive, path)
+        except OSError:
+            return None
+
+    steam_roots = []
+    for hive, path in (
+        (winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam"),
+    ):
+        key = open_key(hive, path)
+        if key is None:
+            continue
+        with key:
+            for name in ("SteamPath", "InstallPath"):
+                if candidate := value(key, name):
+                    if path := location(candidate):
+                        steam_roots.append(path)
+
+    game_locations = []
+    uninstall_paths = (
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    )
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for path in uninstall_paths:
+            parent = open_key(hive, path)
+            if parent is None:
+                continue
+            with parent:
+                index = 0
+                while True:
+                    try:
+                        subkey = winreg.EnumKey(parent, index)
+                    except OSError:
+                        break
+                    index += 1
+                    key = open_key(hive, f"{path}\\{subkey}")
+                    if key is None:
+                        continue
+                    with key:
+                        display_name = value(key, "DisplayName")
+                        if (
+                            not display_name
+                            or "".join(
+                                character
+                                for character in display_name.casefold()
+                                if character.isalnum()
+                            )
+                            != "reverse1999"
+                        ):
+                            continue
+                        if candidate := value(key, "InstallLocation"):
+                            if candidate := location(candidate):
+                                game_locations.append(candidate)
+                        if candidate := value(key, "DisplayIcon"):
+                            icon_path, separator, icon_index = candidate.rpartition(",")
+                            if separator and icon_index.strip().lstrip("-").isdigit():
+                                candidate = icon_path
+                            if candidate := location(candidate.strip(' "')):
+                                game_locations.append(candidate.parent)
+
+    if logger is not None and logger.isEnabledFor(logging.INFO):
+        _log_paths(logger, "Windows registry Steam root", steam_roots)
+        _log_paths(logger, "Windows registry game location", game_locations)
+    return tuple(steam_roots), tuple(game_locations)
+
+
 def game_resource_roots(home=None, environment=None, *, logger=None, include_missing=False):
     """Return known installed platform roots without scanning whole drives."""
     home = Path.home() if home is None else Path(home)
@@ -154,6 +244,13 @@ def game_resource_roots(home=None, environment=None, *, logger=None, include_mis
     steam_roots = [root / "Steam" for root in program_files]
     if environment.get("STEAM_PATH"):
         steam_roots.insert(0, Path(environment["STEAM_PATH"]))
+    registry_steam_roots, registry_game_locations = _windows_registry_install_locations(logger)
+    steam_roots.extend(registry_steam_roots)
+    streaming_roots.extend(
+        root / "reverse1999_Data" / "StreamingAssets"
+        for location in registry_game_locations
+        for root in (location, location / "Reverse1999en")
+    )
     for steam_root in steam_roots:
         if logger is not None and logger.isEnabledFor(logging.INFO):
             logger.info("Steam root probe: %s (exists=%s)", steam_root, steam_root.is_dir())

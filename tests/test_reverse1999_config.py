@@ -1,7 +1,9 @@
 import json
+import sys
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
@@ -9,12 +11,14 @@ from cryptography.hazmat.primitives.padding import PKCS7
 from r1999extractor.reverse1999_catalog import Reverse1999NpcCatalog
 from r1999extractor.reverse1999_config import (
     Reverse1999ConfigError,
+    _windows_registry_install_locations,
     config_header_size,
     config_iv,
     config_key,
     decrypt_config_data,
     extract_dialogue_evidence,
     find_game_config_directory,
+    game_resource_roots,
     load_config_directory,
     parse_data_document,
     parse_language_document,
@@ -47,7 +51,60 @@ def write_platform_resources(root):
     return configs, audio
 
 
+class FakeWindowsRegistry:
+    HKEY_CURRENT_USER = "HKCU"
+    HKEY_LOCAL_MACHINE = "HKLM"
+
+    class Key:
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def __init__(self, values):
+        self.values = values
+
+    def OpenKey(self, hive, path):
+        key = (hive, path)
+        if key not in self.values:
+            raise OSError("missing")
+        return self.Key(key)
+
+    def QueryValueEx(self, key, name):
+        try:
+            return self.values[key.path][name], 1
+        except KeyError as error:
+            raise OSError("missing") from error
+
+    def EnumKey(self, key, index):
+        hive, path = key.path
+        prefix = f"{path}\\"
+        children = sorted(
+            candidate_path[len(prefix) :].split("\\", 1)[0]
+            for candidate_hive, candidate_path in self.values
+            if candidate_hive == hive and candidate_path.startswith(prefix)
+        )
+        children = tuple(dict.fromkeys(children))
+        try:
+            return children[index]
+        except IndexError as error:
+            raise OSError("done") from error
+
+
 class Reverse1999ConfigTest(unittest.TestCase):
+    def setUp(self):
+        registry = patch(
+            "r1999extractor.reverse1999_config._windows_registry_install_locations",
+            return_value=((), ()),
+        )
+        registry.start()
+        self.addCleanup(registry.stop)
+        self.registry = registry
+
     def test_finds_official_windows_client_resources(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -100,6 +157,110 @@ class Reverse1999ConfigTest(unittest.TestCase):
             self.assertEqual(find_game_config_directory(home, environment), configs.resolve())
             self.assertEqual(find_game_resource_root(home, environment), platform.resolve())
             self.assertEqual(find_game_audio_directory(home, environment), audio.resolve())
+
+    def test_finds_windows_registry_steam_and_official_client_resources(self):
+        self.registry.stop()
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            steam = root / "CustomSteam"
+            steamapps = steam / "steamapps"
+            steamapps.mkdir(parents=True)
+            (steamapps / "appmanifest_3092660.acf").write_text(
+                '"AppState" { "installdir" "Reverse 1999" }', encoding="utf-8"
+            )
+            steam_platform = (
+                steamapps
+                / "common"
+                / "Reverse 1999"
+                / "reverse1999_Data"
+                / "StreamingAssets"
+                / "Windows"
+            )
+            write_platform_resources(steam_platform)
+            launcher = root / "Launcher"
+            launcher_platform = (
+                launcher / "Reverse1999en" / "reverse1999_Data" / "StreamingAssets" / "Windows"
+            )
+            launcher_configs, _ = write_platform_resources(launcher_platform)
+            official = root / "Official, Client"
+            official_platform = official / "reverse1999_Data" / "StreamingAssets" / "Windows"
+            write_platform_resources(official_platform)
+            uninstall = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+            registry = FakeWindowsRegistry(
+                {
+                    ("HKCU", r"Software\Valve\Steam"): {"SteamPath": str(steam)},
+                    ("HKCU", uninstall): {},
+                    ("HKCU", uninstall + r"\Reverse1999"): {
+                        "DisplayName": "reverse 1999",
+                        "InstallLocation": str(launcher),
+                        "DisplayIcon": f'"{official / "Reverse, 1999.exe"}",0',
+                    },
+                    ("HKCU", uninstall + r"\Stale"): {
+                        "DisplayName": "Reverse: 1999",
+                        "InstallLocation": str(root / "stale"),
+                    },
+                    ("HKCU", uninstall + r"\Broken"): {
+                        "DisplayName": "Reverse: 1999",
+                        "InstallLocation": "relative",
+                    },
+                    ("HKCU", uninstall + r"\OtherGame"): {
+                        "DisplayName": "Some Other Game",
+                        "InstallLocation": str(root / "unrelated"),
+                    },
+                }
+            )
+            home = root / "Users" / "player"
+            with (
+                patch.object(sys, "platform", "win32"),
+                patch.dict(sys.modules, {"winreg": registry}),
+                patch(
+                    "r1999extractor.reverse1999_config.packaged_macos_resource_roots",
+                    return_value=(),
+                ),
+            ):
+                roots = game_resource_roots(home, {})
+                found = find_game_config_directory(home, {})
+
+            self.assertIn(steam_platform.resolve(), roots)
+            self.assertIn(launcher_platform.resolve(), roots)
+            self.assertIn(official_platform.resolve(), roots)
+            self.assertNotIn(
+                (root / "stale" / "reverse1999_Data" / "StreamingAssets").resolve(), roots
+            )
+            self.assertEqual(found, launcher_configs.resolve())
+
+    def test_reads_custom_drive_steam_registry_path(self):
+        self.registry.stop()
+        registry = FakeWindowsRegistry(
+            {
+                ("HKCU", r"Software\Valve\Steam"): {
+                    "SteamPath": r"D:\\Games\\Steam",
+                    "InstallPath": "relative",
+                }
+            }
+        )
+        with (
+            patch.object(sys, "platform", "win32"),
+            patch.dict(sys.modules, {"winreg": registry}),
+            patch("r1999extractor.reverse1999_config.Path", PureWindowsPath),
+        ):
+            steam_roots, game_locations = _windows_registry_install_locations()
+
+        self.assertEqual(steam_roots, (PureWindowsPath(r"D:\Games\Steam"),))
+        self.assertEqual(game_locations, ())
+
+    def test_windows_registry_discovery_is_safe_off_windows(self):
+        self.registry.stop()
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with (
+                patch.object(sys, "platform", "darwin"),
+                patch(
+                    "r1999extractor.reverse1999_config.packaged_macos_resource_roots",
+                    return_value=(),
+                ),
+            ):
+                self.assertEqual(game_resource_roots(root, {}), ())
 
     def test_decrypts_config_after_authenticated_header(self):
         document = {"hello": "world"}

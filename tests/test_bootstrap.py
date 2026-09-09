@@ -25,6 +25,14 @@ from tests.test_playable_voice import character_row, voice_row
 
 
 class BootstrapTest(unittest.TestCase):
+    def setUp(self):
+        registry = patch(
+            "r1999extractor.reverse1999_config._windows_registry_install_locations",
+            return_value=((), ()),
+        )
+        registry.start()
+        self.addCleanup(registry.stop)
+
     def test_playable_voice_is_available_only_in_narrator_index(self):
         tables = {
             "json_character": [character_row(3141, "centurion", "Centurion")],
