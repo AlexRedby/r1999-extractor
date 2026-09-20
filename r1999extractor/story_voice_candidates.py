@@ -252,6 +252,42 @@ def affected_story_line_counts(story_index, roles):
     return character_counts, portrait_counts
 
 
+def _available_voice_identities_by_bank(story_index):
+    identities = {}
+    try:
+        lines = Path(story_index).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as error:
+        raise StoryVoiceCandidateError(
+            f"Unable to inspect story bank ownership from {story_index}: {error}"
+        ) from error
+    for number, raw in enumerate(lines, start=1):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise StoryVoiceCandidateError(
+                f"Story index line {number} is invalid JSON: {error}"
+            ) from error
+        if (
+            not isinstance(record, dict)
+            or record.get("record_type") != "line"
+            or record.get("source_audio_status") != "available"
+        ):
+            continue
+        bank = str(record.get("source_bank") or "").strip()
+        character = str(record.get("voice_character") or "").strip()
+        if not bank or not character:
+            continue
+        portrait = (
+            str(record["portrait"]).strip()
+            if isinstance(record.get("portrait"), str) and str(record["portrait"]).strip()
+            else None
+        )
+        identities.setdefault(bank, set()).add(
+            (normalize_character_name(character), portrait)
+        )
+    return identities
+
+
 def _bank_entries(bank_index):
     return {entry["filename"].casefold(): entry for entry in bank_index["banks"]}
 
@@ -311,6 +347,7 @@ def build_story_voice_candidates(
     media_decoder=decode_reference_data,
     analyzer=analyze_voice_reference,
     include_all_bank_media=False,
+    include_unlinked_bank_media=False,
     playable_speech_only=False,
 ):
     """Publish a non-authoritative audition set without changing a voice manifest."""
@@ -388,13 +425,25 @@ def build_story_voice_candidates(
                 key = (line.character, line.portrait, line.source_bank, media_id)
                 grouped.setdefault(key, []).append(line)
 
-        if include_all_bank_media:
+        if include_all_bank_media or include_unlinked_bank_media:
+            complete_identities = (
+                _available_voice_identities_by_bank(story_index)
+                if include_unlinked_bank_media and not include_all_bank_media
+                else None
+            )
             identities_by_bank = {}
             for line in lines:
                 identity = (line.character, line.portrait, line.source_bank)
                 identities_by_bank.setdefault(line.source_bank, set()).add(identity)
             for bank, identities in identities_by_bank.items():
+                if complete_identities is not None and complete_identities.get(bank) != {
+                    (normalize_character_name(character), portrait)
+                    for character, portrait, _bank in identities
+                }:
+                    continue
                 if len(identities) != 1:
+                    if include_unlinked_bank_media and not include_all_bank_media:
+                        continue
                     rendered = ", ".join(
                         f"{character!r}/{portrait!r}"
                         for character, portrait, _bank in sorted(
@@ -409,14 +458,23 @@ def build_story_voice_candidates(
                 character, portrait, _bank = next(iter(identities))
                 for media_id in snapshots[bank].media:
                     key = (character, portrait, bank, media_id)
-                    if not grouped.get(key) and any(
+                    if key in grouped:
+                        continue
+                    if any(
                         media_id in streamed_media_ids
                         for streamed_media_ids in snapshots[bank].streamed_routes.values()
                     ):
+                        if include_unlinked_bank_media and not include_all_bank_media:
+                            continue
                         raise StoryVoiceCandidateError(
                             "--include-all-bank-media cannot prepare unlinked streamed media"
                         )
-                    grouped.setdefault(key, [])
+                    if not any(
+                        media_id in media_ids for media_ids in snapshots[bank].routes.values()
+                    ):
+                        if include_unlinked_bank_media and not include_all_bank_media:
+                            continue
+                    grouped[key] = []
 
         candidates = []
         for (character, portrait, bank, media_id), source_lines in sorted(
@@ -549,7 +607,11 @@ def build_story_voice_candidates(
             "group_count": len(groups),
             "candidate_count": len(candidates),
             "bank_inventory_scope": (
-                "complete_exact_bank" if include_all_bank_media else "story_routed_only"
+                "complete_exact_bank"
+                if include_all_bank_media
+                else (
+                    "unambiguous_exact_bank" if include_unlinked_bank_media else "story_routed_only"
+                )
             ),
             "groups": groups,
             "candidates": candidates,

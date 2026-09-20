@@ -234,7 +234,16 @@ class BootstrapTest(unittest.TestCase):
             (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
             builds = []
 
-            def build(_story, _banks, roles, destination, *, playable_speech_only=False):
+            def build(
+                _story,
+                _banks,
+                roles,
+                destination,
+                *,
+                playable_speech_only=False,
+                include_unlinked_bank_media=False,
+            ):
+                self.assertTrue(include_unlinked_bank_media)
                 self.assertFalse(playable_speech_only)
                 builds.append(tuple(roles))
                 destination.mkdir(parents=True)
@@ -354,7 +363,16 @@ class BootstrapTest(unittest.TestCase):
             (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
             builds = []
 
-            def build(source, _banks, roles, destination, *, playable_speech_only=False):
+            def build(
+                source,
+                _banks,
+                roles,
+                destination,
+                *,
+                playable_speech_only=False,
+                include_unlinked_bank_media=False,
+            ):
+                self.assertTrue(include_unlinked_bank_media)
                 self.assertTrue(playable_speech_only)
                 lines, _digest = collect_story_voice_lines(source, roles)
                 builds.append((Path(source), tuple(line.line_id for line in lines)))
@@ -455,7 +473,16 @@ class BootstrapTest(unittest.TestCase):
             references.write_text("{}\n", encoding="utf-8")
             (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
 
-            def build(source, _banks, _roles, destination, *, playable_speech_only=False):
+            def build(
+                source,
+                _banks,
+                _roles,
+                destination,
+                *,
+                playable_speech_only=False,
+                include_unlinked_bank_media=False,
+            ):
+                self.assertTrue(include_unlinked_bank_media)
                 self.assertTrue(playable_speech_only)
                 destination.mkdir(parents=True)
                 report = {
@@ -486,7 +513,16 @@ class BootstrapTest(unittest.TestCase):
             references.write_text("{}\n", encoding="utf-8")
             (output / "english-bank-index.json").write_text("{}", encoding="utf-8")
 
-            def build(source, _banks, _roles, destination, *, playable_speech_only=False):
+            def build(
+                source,
+                _banks,
+                _roles,
+                destination,
+                *,
+                playable_speech_only=False,
+                include_unlinked_bank_media=False,
+            ):
+                self.assertTrue(include_unlinked_bank_media)
                 self.assertTrue(playable_speech_only)
                 Path(source).write_text('{"revision":2}\n', encoding="utf-8")
                 destination.mkdir(parents=True)

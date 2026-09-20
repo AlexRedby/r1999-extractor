@@ -514,6 +514,99 @@ class StoryVoiceCandidateTest(unittest.TestCase):
         self.assertEqual(by_media[20]["source_event_ids"], [2020])
         self.assertEqual(by_media[20]["source_lines"], [])
 
+    def test_player_mode_adds_only_safe_unrouted_bank_media(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = write_story(root / "story.jsonl", [story_line(1, "Exact line.")])
+            audio_root = root / "audio"
+            audio_root.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio_root)
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"routed", 20: b"safe", 30: b"unrouted"},
+                routes={
+                    wwise_event_id("play_hero_line"): (10,),
+                    2020: (20,),
+                },
+            )
+
+            def decode(data, output, media_id, _decoder, *, bank=None):
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(data)
+                return ImportedReference(
+                    output,
+                    media_id,
+                    hashlib.sha256(data).hexdigest(),
+                    hashlib.sha256(data).hexdigest(),
+                    bank,
+                )
+
+            _path, report = build_story_voice_candidates(
+                story,
+                bank_index,
+                ["Hero"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, _filename: snapshot,
+                media_decoder=decode,
+                analyzer=clean_metrics,
+                include_unlinked_bank_media=True,
+            )
+
+        self.assertEqual(report["bank_inventory_scope"], "unambiguous_exact_bank")
+        self.assertEqual({candidate["media_id"] for candidate in report["candidates"]}, {10, 20})
+
+    def test_player_mode_skips_unrouted_media_from_a_shared_bank(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            hero = story_line(1, "Hero line.")
+            other = story_line(2, "Other line.", media_id=40)
+            other["voice_character"] = "Other"
+            other["speaker"] = "Other"
+            other["source_event"] = "play_other_line"
+            story = write_story(root / "story.jsonl", [hero, other])
+            audio_root = root / "audio"
+            audio_root.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio_root)
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"hero", 20: b"unknown", 40: b"other"},
+                routes={
+                    wwise_event_id("play_hero_line"): (10,),
+                    wwise_event_id("play_other_line"): (40,),
+                    2020: (20,),
+                },
+            )
+
+            def decode(data, output, media_id, _decoder, *, bank=None):
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(data)
+                return ImportedReference(
+                    output,
+                    media_id,
+                    hashlib.sha256(data).hexdigest(),
+                    hashlib.sha256(data).hexdigest(),
+                    bank,
+                )
+
+            _path, report = build_story_voice_candidates(
+                story,
+                bank_index,
+                ["Hero"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, _filename: snapshot,
+                media_decoder=decode,
+                analyzer=clean_metrics,
+                include_unlinked_bank_media=True,
+            )
+
+        self.assertEqual(
+            {candidate["media_id"] for candidate in report["candidates"]}, {10}
+        )
+
     def test_include_all_bank_media_rejects_ambiguous_portrait_identity(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

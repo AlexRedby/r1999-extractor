@@ -130,6 +130,7 @@ def prepare_player_voice_candidates(
                 "reference_story_index_sha256": reference_story_sha256,
                 "playable_speech_only": use_playable_speech_only,
                 "reference_decode_version": REFERENCE_DECODE_VERSION,
+                "include_unlinked_bank_media": True,
                 "bank_index_sha256": sha256_file(bank_index),
                 "roles": [normalize_character_name(role) for role in roles],
             },
@@ -161,6 +162,7 @@ def prepare_player_voice_candidates(
                 roles,
                 directory,
                 playable_speech_only=use_playable_speech_only,
+                include_unlinked_bank_media=True,
             )
         return _publish_player_voice_manifest(
             report_path,
