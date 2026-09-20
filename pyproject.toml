@@ -60,4 +60,4 @@ line-length = 100
 select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.uv.sources]
-vntts-artifacts = { git = "https://github.com/AlexRedby/vntts-artifacts.git", rev = "7ba9fa1704fd5c25f2576db4f9133af4fe155cea" }
+vntts-artifacts = { git = "https://github.com/AlexRedby/vntts-artifacts.git", rev = "19e6035986eedae6bbda966d7d5cff8307c9f574" }
