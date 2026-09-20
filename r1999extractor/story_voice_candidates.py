@@ -436,29 +436,56 @@ def build_story_voice_candidates(
                 identity = (line.character, line.portrait, line.source_bank)
                 identities_by_bank.setdefault(line.source_bank, set()).add(identity)
             for bank, identities in identities_by_bank.items():
-                if complete_identities is not None and complete_identities.get(bank) != {
-                    (normalize_character_name(character), portrait)
-                    for character, portrait, _bank in identities
-                }:
-                    continue
+                if complete_identities is not None:
+                    selected_characters = {
+                        normalize_character_name(character)
+                        for character, _portrait, _bank in identities
+                    }
+                    complete_characters = {
+                        character
+                        for character, _portrait in complete_identities.get(bank, ())
+                    }
+                    if (
+                        len(selected_characters) != 1
+                        or complete_characters != selected_characters
+                    ):
+                        continue
                 if len(identities) != 1:
                     if include_unlinked_bank_media and not include_all_bank_media:
-                        continue
-                    rendered = ", ".join(
-                        f"{character!r}/{portrait!r}"
-                        for character, portrait, _bank in sorted(
-                            identities,
-                            key=lambda value: tuple(str(part or "").casefold() for part in value),
+                        identities = {
+                            min(
+                                identities,
+                                key=lambda value: tuple(
+                                    str(part or "").casefold() for part in value
+                                ),
+                            )
+                        }
+                    else:
+                        rendered = ", ".join(
+                            f"{character!r}/{portrait!r}"
+                            for character, portrait, _bank in sorted(
+                                identities,
+                                key=lambda value: tuple(
+                                    str(part or "").casefold() for part in value
+                                ),
+                            )
                         )
-                    )
-                    raise StoryVoiceCandidateError(
-                        "--include-all-bank-media requires one exact role/portrait "
-                        f"identity per bank; {bank} maps to {rendered}"
-                    )
+                        raise StoryVoiceCandidateError(
+                            "--include-all-bank-media requires one exact role/portrait "
+                            f"identity per bank; {bank} maps to {rendered}"
+                        )
                 character, portrait, _bank = next(iter(identities))
                 for media_id in snapshots[bank].media:
                     key = (character, portrait, bank, media_id)
-                    if key in grouped:
+                    if any(
+                        existing_bank == bank and existing_media_id == media_id
+                        for (
+                            _existing_character,
+                            _existing_portrait,
+                            existing_bank,
+                            existing_media_id,
+                        ) in grouped
+                    ):
                         continue
                     if any(
                         media_id in streamed_media_ids

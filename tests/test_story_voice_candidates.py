@@ -607,6 +607,54 @@ class StoryVoiceCandidateTest(unittest.TestCase):
             {candidate["media_id"] for candidate in report["candidates"]}, {10}
         )
 
+    def test_player_mode_accepts_multiple_portraits_of_one_character(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = story_line(1, "First expression.")
+            second = story_line(2, "Second expression.", portrait="hero-smile.png")
+            story = write_story(root / "story.jsonl", [first, second])
+            audio_root = root / "audio"
+            audio_root.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio_root)
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"routed", 20: b"unlinked"},
+                routes={
+                    wwise_event_id("play_hero_line"): (10,),
+                    2020: (20,),
+                },
+            )
+
+            def decode(data, output, media_id, _decoder, *, bank=None):
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(data)
+                return ImportedReference(
+                    output,
+                    media_id,
+                    hashlib.sha256(data).hexdigest(),
+                    hashlib.sha256(data).hexdigest(),
+                    bank,
+                )
+
+            _path, report = build_story_voice_candidates(
+                story,
+                bank_index,
+                ["Hero"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, _filename: snapshot,
+                media_decoder=decode,
+                analyzer=clean_metrics,
+                include_unlinked_bank_media=True,
+            )
+
+        self.assertEqual(
+            {candidate["media_id"] for candidate in report["candidates"]},
+            {10, 20},
+        )
+        self.assertEqual(len(report["candidates"]), 3)
+
     def test_include_all_bank_media_rejects_ambiguous_portrait_identity(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
