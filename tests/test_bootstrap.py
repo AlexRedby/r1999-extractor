@@ -210,6 +210,27 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "Built 7 story lines and source artifacts\n")
         self.assertNotIn("Unable to find", stderr.getvalue())
 
+    def test_cli_forwards_selected_target_story_index(self):
+        target = Path("selected-story-index.jsonl")
+        with patch(
+            "r1999extractor.bootstrap.prepare_player_voice_candidates",
+            return_value=Path("manifest.json"),
+        ) as prepare:
+            self.assertEqual(
+                main(
+                    [
+                        "--prepare-voice-candidates-only",
+                        "--voice-candidate-role",
+                        "Hero",
+                        "--target-story-index",
+                        str(target),
+                    ]
+                ),
+                0,
+            )
+
+        self.assertEqual(prepare.call_args.kwargs["target_story_index"], target)
+
     def test_prepares_and_reuses_player_voice_candidate_manifest(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -326,12 +347,12 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(evidence["variants"][0]["source_line_ids"], ["line:source"])
         self.assertEqual(evidence["variants"][0]["portrait_image_sha256"], "a" * 64)
 
-    def test_player_candidates_use_playable_catalog_and_invalidate_both_indexes(self):
+    def test_player_candidates_use_external_target_and_invalidate_both_indexes(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "reverse1999"
             output.mkdir()
-            target = output / "story-index.jsonl"
+            target = root / "selected-story-index.jsonl"
             references = output / "narrator-index.jsonl"
             target.write_text(
                 json.dumps({"record_type": "metadata", "revision": 1}) + "\n",
@@ -421,12 +442,12 @@ class BootstrapTest(unittest.TestCase):
                 patch("r1999extractor.bootstrap.extract_story_portraits", return_value={}),
             ):
                 first = prepare_player_voice_candidates(
-                    roles=("Centurion",), data_directory=root
+                    roles=("Centurion",), data_directory=root, target_story_index=target
                 )
                 self.assertEqual(
                     first,
                     prepare_player_voice_candidates(
-                        roles=("Centurion",), data_directory=root
+                        roles=("Centurion",), data_directory=root, target_story_index=target
                     ),
                 )
                 references.write_text(
@@ -437,14 +458,14 @@ class BootstrapTest(unittest.TestCase):
                     encoding="utf-8",
                 )
                 changed_references = prepare_player_voice_candidates(
-                    roles=("Centurion",), data_directory=root
+                    roles=("Centurion",), data_directory=root, target_story_index=target
                 )
                 target.write_text(
                     json.dumps({"record_type": "metadata", "revision": 2}) + "\n",
                     encoding="utf-8",
                 )
                 changed_target = prepare_player_voice_candidates(
-                    roles=("Centurion",), data_directory=root
+                    roles=("Centurion",), data_directory=root, target_story_index=target
                 )
 
             manifest = json.loads(first.read_text(encoding="utf-8"))

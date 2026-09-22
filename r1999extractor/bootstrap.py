@@ -81,7 +81,12 @@ def _bootstrap_discovery_logging():
 
 
 def prepare_player_voice_candidates(
-    *, roles, data_directory=None, narrator=False, narrator_line_id=None
+    *,
+    roles,
+    data_directory=None,
+    target_story_index=None,
+    narrator=False,
+    narrator_line_id=None,
 ):
     """Build or reuse safe, selected-role candidates for the player workflow."""
     roles = tuple(
@@ -95,7 +100,11 @@ def prepare_player_voice_candidates(
     output = (
         Path(data_directory or get_local_data_directory()).expanduser().resolve() / "reverse1999"
     )
-    target_story_index = output / "story-index.jsonl"
+    target_story_index = (
+        Path(target_story_index).expanduser().resolve()
+        if target_story_index
+        else output / "story-index.jsonl"
+    )
     reference_story_index = output / "narrator-index.jsonl"
     bank_index = output / "english-bank-index.json"
     if narrator:
@@ -481,6 +490,7 @@ def create_parser():
     parser.add_argument("--overlay", type=Path)
     parser.add_argument("--game-version", default="installed")
     parser.add_argument("--prepare-voice-candidates-only", action="store_true")
+    parser.add_argument("--target-story-index", type=Path)
     parser.add_argument("--narrator", action="store_true")
     parser.add_argument("--narrator-line-id")
     parser.add_argument("--voice-candidate-role", action="append", default=[])
@@ -500,6 +510,7 @@ def main(arguments=None):
                 manifest = prepare_player_voice_candidates(
                     roles=options.voice_candidate_role,
                     data_directory=options.data_directory,
+                    target_story_index=options.target_story_index,
                     narrator=options.narrator,
                     narrator_line_id=options.narrator_line_id,
                 )
