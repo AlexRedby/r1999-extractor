@@ -295,6 +295,7 @@ class BootstrapTest(unittest.TestCase):
                             "source_bank": "hero.bnk",
                             "media_id": 7,
                             "source_event_ids": [70],
+                            "candidate_origin": "exact_bank_unrouted_media",
                             "reference": "references/hero.wav",
                             "reference_sha256": hashlib.sha256(b"voice").hexdigest(),
                             "source_lines": [
@@ -356,6 +357,9 @@ class BootstrapTest(unittest.TestCase):
             ["line:a", "line:source", "line:Z"],
         )
         self.assertEqual(evidence["variants"][0]["portrait_image_sha256"], "a" * 64)
+        self.assertEqual(
+            evidence["variants"][0]["candidate_origin"], "exact_bank_unrouted_media"
+        )
 
     def test_player_candidates_use_external_target_and_invalidate_both_indexes(self):
         with TemporaryDirectory() as directory:

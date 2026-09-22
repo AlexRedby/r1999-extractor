@@ -297,6 +297,7 @@ def _publish_player_voice_manifest(
                     key=str.casefold,
                 ),
                 "source_event_ids": candidate.get("source_event_ids", []),
+                "candidate_origin": candidate.get("candidate_origin"),
                 "duration_seconds": metrics.get("duration_seconds"),
                 "quality_score": metrics.get("quality_score"),
             }
