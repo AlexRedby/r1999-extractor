@@ -140,6 +140,7 @@ def prepare_player_voice_candidates(
                 "playable_speech_only": use_playable_speech_only,
                 "reference_decode_version": REFERENCE_DECODE_VERSION,
                 "unlinked_bank_media_policy_version": 2,
+                "candidate_catalog_version": 3,
                 "bank_index_sha256": sha256_file(bank_index),
                 "roles": [normalize_character_name(role) for role in roles],
             },
@@ -282,7 +283,8 @@ def _publish_player_voice_manifest(
                         str(line.get("source_audio_id") or "").strip()
                         for line in source_lines
                         if isinstance(line, dict) and str(line.get("source_audio_id") or "").strip()
-                    }
+                    },
+                    key=str.casefold,
                 ),
                 "voice_character": voice_character,
                 "reference_sha256": reference_sha256,
@@ -291,7 +293,8 @@ def _publish_player_voice_manifest(
                         str(line.get("line_id") or "").strip()
                         for line in source_lines
                         if isinstance(line, dict) and str(line.get("line_id") or "").strip()
-                    }
+                    },
+                    key=str.casefold,
                 ),
                 "source_event_ids": candidate.get("source_event_ids", []),
                 "duration_seconds": metrics.get("duration_seconds"),

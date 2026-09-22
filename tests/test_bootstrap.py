@@ -297,7 +297,11 @@ class BootstrapTest(unittest.TestCase):
                             "source_event_ids": [70],
                             "reference": "references/hero.wav",
                             "reference_sha256": hashlib.sha256(b"voice").hexdigest(),
-                            "source_lines": [source_line],
+                            "source_lines": [
+                                source_line,
+                                {"line_id": "line:Z", "source_audio_id": "play_Z"},
+                                {"line_id": "line:a", "source_audio_id": "play_a"},
+                            ],
                             "metrics": {"duration_seconds": 3.0, "quality_score": 100},
                         }
                     ],
@@ -343,8 +347,14 @@ class BootstrapTest(unittest.TestCase):
         )
         self.assertEqual(len(manifest["voices"]), 1)
         self.assertEqual(evidence["story_index_sha256"], story_digest)
-        self.assertEqual(evidence["variants"][0]["source_voice_ids"], ["play_hero_7"])
-        self.assertEqual(evidence["variants"][0]["source_line_ids"], ["line:source"])
+        self.assertEqual(
+            evidence["variants"][0]["source_voice_ids"],
+            ["play_a", "play_hero_7", "play_Z"],
+        )
+        self.assertEqual(
+            evidence["variants"][0]["source_line_ids"],
+            ["line:a", "line:source", "line:Z"],
+        )
         self.assertEqual(evidence["variants"][0]["portrait_image_sha256"], "a" * 64)
 
     def test_player_candidates_use_external_target_and_invalidate_both_indexes(self):
