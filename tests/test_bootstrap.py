@@ -10,6 +10,7 @@ from unittest.mock import patch
 from r1999extractor.bootstrap import (
     PLAYER_VOICE_CANDIDATES_FIELD,
     BootstrapError,
+    _publish_player_voice_manifest,
     bootstrap_local_artifacts,
     main,
     prepare_player_voice_candidates,
@@ -32,6 +33,88 @@ class BootstrapTest(unittest.TestCase):
         )
         registry.start()
         self.addCleanup(registry.stop)
+
+    def test_publishes_manual_too_long_playable_candidate_with_checksum_bound_excerpt(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference_index = root / "narrator-index.jsonl"
+            target_index = root / "story-index.jsonl"
+            reference_index.write_text("reference\n", encoding="utf-8")
+            target_index.write_text("target\n", encoding="utf-8")
+            reference_sha256 = hashlib.sha256(reference_index.read_bytes()).hexdigest()
+            target_sha256 = hashlib.sha256(target_index.read_bytes()).hexdigest()
+            reference = root / "references/rhiannon.wav"
+            reference.parent.mkdir()
+            reference.write_bytes(b"voice")
+            source_line = {
+                "line_id": "playable-voice:3146:1314605:4",
+                "source_audio_id": "1314605",
+                "collection_title": "Greetings",
+                "text": "Good to see you, Vertin!",
+            }
+            candidate = {
+                "character": "Rhiannon",
+                "portrait": None,
+                "source_bank": "hero3146_mainvoc.bnk",
+                "media_id": 1052088700,
+                "source_event_ids": [1314605],
+                "candidate_origin": "story_line_route",
+                "reference": "references/rhiannon.wav",
+                "reference_sha256": hashlib.sha256(b"voice").hexdigest(),
+                "source_lines": [source_line],
+                "metrics": {"duration_seconds": 15.3, "quality_score": 80},
+            }
+            report = {
+                "schema": REPORT_SCHEMA,
+                "schema_version": REPORT_VERSION,
+                "story_index": str(reference_index.resolve()),
+                "story_index_sha256": reference_sha256,
+                "groups": [
+                    {
+                        "character": "Rhiannon",
+                        "portrait": None,
+                        "source_bank": "hero3146_mainvoc.bnk",
+                        "recommended_media_ids_for_audition": [],
+                        "manual_review_media_ids_for_audition": [1052088700],
+                    }
+                ],
+                "candidates": [candidate],
+            }
+            report_path = root / "report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            manifest_path = root / "manifest.json"
+
+            _publish_player_voice_manifest(
+                report_path,
+                report,
+                manifest_path,
+                reference_index,
+                target_index,
+                reference_sha256,
+                target_sha256,
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
+        variant = evidence["variants"][0]
+        self.assertEqual(evidence["schema_version"], 3)
+        self.assertEqual(len(manifest["voices"]), 1)
+        self.assertEqual(
+            variant["source_excerpts"],
+            [
+                {
+                    "line_id": "playable-voice:3146:1314605:4",
+                    "title": "Greetings",
+                    "text": "Good to see you, Vertin!",
+                }
+            ],
+        )
+        self.assertEqual(
+            variant["variant_id"],
+            hashlib.sha256(
+                json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+        )
 
     def test_playable_voice_is_available_only_in_narrator_index(self):
         tables = {

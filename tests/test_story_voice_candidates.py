@@ -13,6 +13,7 @@ from r1999extractor.story_voice_candidates import (
     affected_story_line_counts,
     build_story_voice_candidates,
     collect_story_voice_lines,
+    is_manual_playable_too_long_candidate,
 )
 from r1999extractor.voice_reference_quality import VoiceReferenceMetrics
 
@@ -106,6 +107,24 @@ def clean_metrics(path):
 
 
 class StoryVoiceCandidateTest(unittest.TestCase):
+    def test_manual_picker_accepts_only_playable_main_voice_with_too_long_flag(self):
+        candidate = {
+            "source_bank": "hero3146_mainvoc.bnk",
+            "source_lines": [{"line_id": "playable-voice:3146:1314605:4"}],
+            "metrics": {"technical_flags": ["too-long"]},
+            "transcript_conflict": False,
+        }
+
+        self.assertTrue(is_manual_playable_too_long_candidate(candidate))
+        for field, value in (
+            ("transcript_conflict", True),
+            ("source_bank", "hero3146_combat.bnk"),
+            ("metrics", {"technical_flags": ["too-long", "excessive-silence"]}),
+            ("metrics", {"technical_flags": []}),
+        ):
+            rejected = {**candidate, field: value}
+            self.assertFalse(is_manual_playable_too_long_candidate(rejected))
+
     def test_collects_only_exact_installed_role_and_validates_text_hash(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

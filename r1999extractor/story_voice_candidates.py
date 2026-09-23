@@ -210,6 +210,26 @@ def is_playable_main_voice_reference(line_id, source_bank):
     return bank.startswith("mianvoc_hero") or bank.endswith("_mainvoc")
 
 
+def is_manual_playable_too_long_candidate(candidate):
+    """Return whether a playable main-voice clip is safe for manual audition only."""
+    source_lines = candidate.get("source_lines")
+    metrics = candidate.get("metrics")
+    return (
+        candidate.get("transcript_conflict") is False
+        and isinstance(source_lines, list)
+        and bool(source_lines)
+        and isinstance(metrics, dict)
+        and metrics.get("technical_flags") == ["too-long"]
+        and all(
+            isinstance(line, dict)
+            and is_playable_main_voice_reference(
+                line.get("line_id"), candidate.get("source_bank")
+            )
+            for line in source_lines
+        )
+    )
+
+
 def affected_story_line_counts(story_index, roles):
     """Count missing-source speakable lines by exact role and portrait."""
     requested = {
@@ -616,6 +636,11 @@ def build_story_voice_candidates(
                         for value in ranked
                         if value["technical_pass"] and not value["transcript_conflict"]
                     ][:3],
+                    "manual_review_media_ids_for_audition": [
+                        value["media_id"]
+                        for value in ranked
+                        if is_manual_playable_too_long_candidate(value)
+                    ],
                     "manual_content_review_required": True,
                     "affected_character_line_count": character_affected[character],
                     "affected_portrait_line_count": portrait_affected.get((character, portrait), 0),

@@ -53,7 +53,7 @@ from r1999extractor.structured_story import audit_story_like_tables
 
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
-PLAYER_VOICE_CANDIDATES_VERSION = 2
+PLAYER_VOICE_CANDIDATES_VERSION = 3
 DISCOVERY_LOGGER_NAME = "r1999extractor.discovery"
 
 
@@ -220,6 +220,18 @@ def _publish_player_voice_manifest(
         if isinstance(group, dict)
         for media_id in group.get("recommended_media_ids_for_audition", ())
     }
+    manual_review = {
+        (
+            group.get("character"),
+            group.get("portrait"),
+            group.get("source_bank"),
+            media_id,
+        )
+        for group in report.get("groups", ())
+        if isinstance(group, dict)
+        for media_id in group.get("manual_review_media_ids_for_audition", ())
+    }
+    published = recommended | manual_review
     portrait_hashes = _prepare_player_portraits(
         reference_story_index,
         {
@@ -231,7 +243,7 @@ def _publish_player_voice_manifest(
                 candidate.get("source_bank"),
                 candidate.get("media_id"),
             )
-            in recommended
+            in published
         },
     )
     voices = []
@@ -244,7 +256,7 @@ def _publish_player_voice_manifest(
             candidate.get("source_bank"),
             candidate.get("media_id"),
         )
-        if identity not in recommended:
+        if identity not in published:
             continue
         reference = str(candidate.get("reference") or "").strip()
         reference_path = (root / reference).resolve()
@@ -268,6 +280,22 @@ def _publish_player_voice_manifest(
         )
         source_lines = candidate.get("source_lines", ())
         metrics = candidate.get("metrics", {})
+        source_excerpts = sorted(
+            (
+                {
+                    "line_id": str(line.get("line_id") or "").strip(),
+                    "title": str(line.get("collection_title") or "").strip() or None,
+                    "text": str(line.get("text") or "").strip(),
+                }
+                for line in source_lines
+                if isinstance(line, dict) and str(line.get("text") or "").strip()
+            ),
+            key=lambda value: (
+                value["line_id"].casefold(),
+                value["title"] or "",
+                value["text"],
+            ),
+        )
         variants.append(
             {
                 "variant_id": variant_id,
@@ -296,6 +324,7 @@ def _publish_player_voice_manifest(
                     },
                     key=str.casefold,
                 ),
+                "source_excerpts": source_excerpts,
                 "source_event_ids": candidate.get("source_event_ids", []),
                 "candidate_origin": candidate.get("candidate_origin"),
                 "duration_seconds": metrics.get("duration_seconds"),
