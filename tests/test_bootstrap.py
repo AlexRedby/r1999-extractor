@@ -138,7 +138,7 @@ class BootstrapTest(unittest.TestCase):
             target_index.write_text("target\n", encoding="utf-8")
             report_path = root / "report.json"
             candidates = []
-            for media_id in range(1, 6):
+            for media_id in range(1, 7):
                 reference = root / "references" / f"{media_id}.wav"
                 reference.parent.mkdir(exist_ok=True)
                 reference.write_bytes(f"voice {media_id}".encode())
@@ -150,14 +150,18 @@ class BootstrapTest(unittest.TestCase):
                         "media_id": media_id,
                         "reference": f"references/{media_id}.wav",
                         "reference_sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
-                        "source_lines": [
+                        "source_lines": []
+                        if media_id == 6
+                        else [
                             {
                                 "line_id": f"playable-voice:3032:{media_id}",
                                 "text": f"Original line {media_id}.",
                             }
                         ],
                         "source_event_ids": [media_id],
-                        "candidate_origin": "story_line_route",
+                        "candidate_origin": (
+                            "exact_bank_unrouted_media" if media_id == 6 else "story_line_route"
+                        ),
                         "metrics": {"duration_seconds": 3.0, "quality_score": 90},
                         "technical_pass": media_id != 5,
                         "transcript_conflict": False,

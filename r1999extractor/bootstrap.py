@@ -242,6 +242,7 @@ def _publish_player_voice_manifest(
         if isinstance(candidate, dict)
         and candidate.get("technical_pass") is True
         and candidate.get("transcript_conflict") is False
+        and candidate.get("candidate_origin") == "story_line_route"
     }
     published = recommended | clean | manual_review
     portrait_hashes = _prepare_player_portraits(
