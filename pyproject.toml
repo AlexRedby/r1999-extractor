@@ -38,7 +38,6 @@ r1999-story-voice-review-ui = "r1999extractor.entrypoints:story_voice_review_mai
 r1999-story-voice-evidence = "r1999extractor.story_voice_evidence:main"
 r1999-bank-index = "r1999extractor.reverse1999_index:main"
 r1999-config-index = "r1999extractor.reverse1999_config:main"
-r1999-audition = "r1999extractor.entrypoints:audition_main"
 r1999-batch = "r1999extractor.reverse1999_batch:main"
 r1999-catalog = "r1999extractor.reverse1999_catalog:main"
 r1999-repository-guard = "r1999extractor.repository_guard:main"

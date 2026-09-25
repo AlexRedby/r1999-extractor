@@ -14,7 +14,6 @@ import numpy as np
 from vntts_artifacts.atomic_io import atomic_write_json
 
 from r1999extractor.reverse1999_aliases import canonical_voice_name
-from r1999extractor.reverse1999_audition import default_mapping_path
 from r1999extractor.reverse1999_catalog import (
     Reverse1999CatalogError,
     Reverse1999NpcCatalog,
@@ -42,7 +41,6 @@ from r1999extractor.reverse1999_voice_import import default_output as default_vo
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.voice_reference_quality import (
     analyze_voice_reference,
-    default_review_path,
     read_pcm_wav,
     select_reference_set,
     trim_and_normalize_voice_reference,
@@ -51,6 +49,8 @@ from r1999extractor.wwise import convert_audio, resolve_decoder
 
 state_version = 1
 default_state_path = get_local_data_directory() / "reverse1999" / "batch-state.json"
+default_mapping_path = get_local_data_directory() / "reverse1999" / "speaker-mappings.json"
+default_review_path = get_local_data_directory() / "reverse1999" / "clip-reviews.json"
 default_batch_cache = get_local_data_directory() / "reverse1999" / "batch"
 default_auto_review_path = get_local_data_directory() / "reverse1999" / "auto-review-queue.json"
 

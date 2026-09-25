@@ -62,14 +62,14 @@ This creates the locked headless/source-only environment. It does not install
 speech models, a playback runtime, or Qt. Run commands through `uv run`, for
 example `uv run r1999-bootstrap`.
 
-Install Qt only for local source-reference audition:
+Install Qt only for local Character Story reference review:
 
 ```bash
 uv sync --group dev --extra ui
 ```
 
-`r1999-audition` loads Qt lazily and explains the optional extra when it is
-absent. Source extraction remains usable without it.
+`r1999-story-voice-review-ui` loads Qt lazily and explains the optional extra
+when it is absent. Source extraction remains usable without it.
 
 ## Source-only artifact boundary
 
@@ -187,15 +187,10 @@ its localized text:
 r1999-source-audit
 ```
 
-## Existing voice-reference workflow
+## Voice-reference workflow
 
-```bash
-r1999-batch scan
-r1999-audition
-```
-
-The batch, catalog, Wwise, quality-scoring, and audition commands preserve the
-game-specific source-reference workflow. Patch coverage counts, accepted
+Use the source candidate and Character Story review commands below to prepare
+and inspect game-derived references. Patch coverage counts, accepted
 game-derived identity evidence, checksums, and the procedure for refusing
 ambiguous assignments are in
 [`docs/source-voice-coverage.md`](docs/source-voice-coverage.md).
@@ -320,5 +315,5 @@ uv run python -m unittest discover -s tests
 uv run r1999-repository-guard
 ```
 
-Without the `ui` extra, Qt audition tests are skipped. CI installs the extra
-and runs those UI tests separately.
+Without the `ui` extra, Character Story review UI tests are skipped. CI installs
+the extra and runs those UI tests separately.

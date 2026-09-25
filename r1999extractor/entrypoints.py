@@ -3,14 +3,6 @@ from importlib import import_module
 from r1999extractor.cli import cli_error
 
 
-def audition_main(arguments=None):
-    return _run_optional_qt_ui(
-        "r1999extractor.reverse1999_audition_ui",
-        arguments,
-        "Source-reference audition",
-    )
-
-
 def story_voice_review_main(arguments=None):
     return _run_optional_qt_ui(
         "r1999extractor.story_voice_review_ui",

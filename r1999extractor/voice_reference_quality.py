@@ -1,8 +1,7 @@
 import argparse
-import json
 import math
 import wave
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from itertools import combinations
 from pathlib import Path
 
@@ -11,9 +10,6 @@ from vntts_artifacts.atomic_io import atomic_write_json
 from vntts_artifacts.audio import write_pcm16_wav
 
 from r1999extractor.cli import cli_error
-from r1999extractor.settings import get_local_data_directory
-
-default_review_path = get_local_data_directory() / "reverse1999" / "clip-reviews.json"
 
 
 class VoiceReferenceQualityError(RuntimeError):
@@ -35,23 +31,6 @@ class VoiceReferenceMetrics:
     music_or_sfx: bool | None = None
     multiple_speakers: bool | None = None
     matches_expected_speaker: bool | None = None
-
-    @property
-    def review_complete(self):
-        return (
-            self.music_or_sfx is not None
-            and self.multiple_speakers is not None
-            and self.matches_expected_speaker is not None
-        )
-
-    @property
-    def approved(self):
-        return (
-            not self.technical_flags
-            and self.music_or_sfx is False
-            and self.multiple_speakers is False
-            and self.matches_expected_speaker is True
-        )
 
 
 def _decode_pcm(raw, sample_width):
@@ -202,80 +181,6 @@ def trim_and_normalize_voice_reference(
     output = Path(output).expanduser().resolve()
     write_pcm16_wav(output, normalized, sample_rate)
     return output
-
-
-def review_voice_reference(
-    metrics,
-    *,
-    music_or_sfx,
-    multiple_speakers,
-    matches_expected_speaker,
-):
-    if not all(
-        isinstance(value, bool)
-        for value in (music_or_sfx, multiple_speakers, matches_expected_speaker)
-    ):
-        raise VoiceReferenceQualityError(
-            "Music/SFX, speaker count, and expected-speaker decisions are required"
-        )
-    return replace(
-        metrics,
-        music_or_sfx=music_or_sfx,
-        multiple_speakers=multiple_speakers,
-        matches_expected_speaker=matches_expected_speaker,
-    )
-
-
-def record_clip_review(
-    metrics,
-    *,
-    speaker_name,
-    npc_id,
-    bank,
-    media_id,
-    chapter,
-    path=default_review_path,
-):
-    if not metrics.review_complete:
-        raise VoiceReferenceQualityError("Listen to and review the clip before saving")
-    path = Path(path).expanduser().resolve()
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        document = {"version": 1, "clips": []}
-    except (OSError, json.JSONDecodeError) as error:
-        raise VoiceReferenceQualityError(f"Unable to read clip reviews: {error}")
-    clips = document.get("clips")
-    if document.get("version") != 1 or not isinstance(clips, list):
-        raise VoiceReferenceQualityError("Clip review file has an unsupported format")
-    bank_name = Path(bank).name
-    clips[:] = [
-        item
-        for item in clips
-        if not (item.get("bank") == bank_name and item.get("media_id") == int(media_id))
-    ]
-    item = {
-        "speaker_name": speaker_name.strip(),
-        "npc_id": str(npc_id).strip(),
-        "bank": bank_name,
-        "media_id": int(media_id),
-        "chapter": str(chapter),
-        "approved": metrics.approved,
-        "music_or_sfx": metrics.music_or_sfx,
-        "multiple_speakers": metrics.multiple_speakers,
-        "matches_expected_speaker": metrics.matches_expected_speaker,
-        "metrics": asdict(metrics),
-    }
-    clips.append(item)
-    clips.sort(
-        key=lambda value: (
-            value["speaker_name"].casefold(),
-            value["bank"].casefold(),
-            value["media_id"],
-        )
-    )
-    atomic_write_json(path, document)
-    return path
 
 
 def select_reference_set(
