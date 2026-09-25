@@ -53,7 +53,7 @@ from r1999extractor.structured_story import audit_story_like_tables
 
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
-PLAYER_VOICE_CANDIDATES_VERSION = 3
+PLAYER_VOICE_CANDIDATES_VERSION = 4
 DISCOVERY_LOGGER_NAME = "r1999extractor.discovery"
 
 
@@ -231,7 +231,19 @@ def _publish_player_voice_manifest(
         if isinstance(group, dict)
         for media_id in group.get("manual_review_media_ids_for_audition", ())
     }
-    published = recommended | manual_review
+    clean = {
+        (
+            candidate.get("character"),
+            candidate.get("portrait"),
+            candidate.get("source_bank"),
+            candidate.get("media_id"),
+        )
+        for candidate in report.get("candidates", ())
+        if isinstance(candidate, dict)
+        and candidate.get("technical_pass") is True
+        and candidate.get("transcript_conflict") is False
+    }
+    published = recommended | clean | manual_review
     portrait_hashes = _prepare_player_portraits(
         reference_story_index,
         {
@@ -296,6 +308,12 @@ def _publish_player_voice_manifest(
                 value["text"],
             ),
         )
+        seen_texts = set()
+        distinct_excerpts = []
+        for excerpt in source_excerpts:
+            if excerpt["text"] not in seen_texts:
+                distinct_excerpts.append(excerpt)
+                seen_texts.add(excerpt["text"])
         variants.append(
             {
                 "variant_id": variant_id,
@@ -324,7 +342,7 @@ def _publish_player_voice_manifest(
                     },
                     key=str.casefold,
                 ),
-                "source_excerpts": source_excerpts,
+                "source_excerpts": distinct_excerpts,
                 "source_event_ids": candidate.get("source_event_ids", []),
                 "candidate_origin": candidate.get("candidate_origin"),
                 "duration_seconds": metrics.get("duration_seconds"),

@@ -61,7 +61,15 @@ class BootstrapTest(unittest.TestCase):
                 "candidate_origin": "story_line_route",
                 "reference": "references/rhiannon.wav",
                 "reference_sha256": hashlib.sha256(b"voice").hexdigest(),
-                "source_lines": [source_line],
+                "source_lines": [
+                    source_line,
+                    {
+                        "line_id": "playable-voice:3146:1314635:4",
+                        "source_audio_id": "1314635",
+                        "collection_title": "Night",
+                        "text": "Good to see you, Vertin!",
+                    },
+                ],
                 "metrics": {"duration_seconds": 15.3, "quality_score": 80},
             }
             report = {
@@ -97,8 +105,13 @@ class BootstrapTest(unittest.TestCase):
 
         evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
         variant = evidence["variants"][0]
-        self.assertEqual(evidence["schema_version"], 3)
+        self.assertEqual(evidence["schema_version"], 4)
         self.assertEqual(len(manifest["voices"]), 1)
+        self.assertEqual(
+            variant["source_line_ids"],
+            ["playable-voice:3146:1314605:4", "playable-voice:3146:1314635:4"],
+        )
+        self.assertEqual(variant["source_voice_ids"], ["1314605", "1314635"])
         self.assertEqual(
             variant["source_excerpts"],
             [
@@ -114,6 +127,78 @@ class BootstrapTest(unittest.TestCase):
             hashlib.sha256(
                 json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode("utf-8")
             ).hexdigest(),
+        )
+
+    def test_publishes_all_clean_references_beyond_three_recommendations(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference_index = root / "narrator-index.jsonl"
+            target_index = root / "story-index.jsonl"
+            reference_index.write_text("reference\n", encoding="utf-8")
+            target_index.write_text("target\n", encoding="utf-8")
+            report_path = root / "report.json"
+            candidates = []
+            for media_id in range(1, 6):
+                reference = root / "references" / f"{media_id}.wav"
+                reference.parent.mkdir(exist_ok=True)
+                reference.write_bytes(f"voice {media_id}".encode())
+                candidates.append(
+                    {
+                        "character": "Centurion",
+                        "portrait": None,
+                        "source_bank": "mianvoc_hero3032.bnk",
+                        "media_id": media_id,
+                        "reference": f"references/{media_id}.wav",
+                        "reference_sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
+                        "source_lines": [
+                            {
+                                "line_id": f"playable-voice:3032:{media_id}",
+                                "text": f"Original line {media_id}.",
+                            }
+                        ],
+                        "source_event_ids": [media_id],
+                        "candidate_origin": "story_line_route",
+                        "metrics": {"duration_seconds": 3.0, "quality_score": 90},
+                        "technical_pass": media_id != 5,
+                        "transcript_conflict": False,
+                    }
+                )
+            report = {
+                "schema": REPORT_SCHEMA,
+                "schema_version": REPORT_VERSION,
+                "story_index": str(reference_index.resolve()),
+                "story_index_sha256": hashlib.sha256(reference_index.read_bytes()).hexdigest(),
+                "groups": [
+                    {
+                        "character": "Centurion",
+                        "portrait": None,
+                        "source_bank": "mianvoc_hero3032.bnk",
+                        "recommended_media_ids_for_audition": [1, 2, 3],
+                        "manual_review_media_ids_for_audition": [],
+                    }
+                ],
+                "candidates": candidates,
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            _publish_player_voice_manifest(
+                report_path,
+                report,
+                root / "manifest.json",
+                reference_index,
+                target_index,
+                report["story_index_sha256"],
+                hashlib.sha256(target_index.read_bytes()).hexdigest(),
+            )
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(manifest["voices"]), 4)
+        self.assertEqual(
+            [
+                variant["source_event_ids"][0]
+                for variant in manifest[PLAYER_VOICE_CANDIDATES_FIELD]["variants"]
+            ],
+            [1, 2, 3, 4],
         )
 
     def test_playable_voice_is_available_only_in_narrator_index(self):
