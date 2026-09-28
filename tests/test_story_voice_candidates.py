@@ -116,10 +116,15 @@ class StoryVoiceCandidateTest(unittest.TestCase):
         }
 
         self.assertTrue(is_manual_playable_too_long_candidate(candidate))
+        self.assertTrue(
+            is_manual_playable_too_long_candidate(
+                {**candidate, "metrics": {"technical_flags": ["too-long", "excessive-silence"]}}
+            )
+        )
         for field, value in (
             ("transcript_conflict", True),
             ("source_bank", "hero3146_combat.bnk"),
-            ("metrics", {"technical_flags": ["too-long", "excessive-silence"]}),
+            ("metrics", {"technical_flags": ["too-long", "music-or-sfx"]}),
             ("metrics", {"technical_flags": []}),
         ):
             rejected = {**candidate, field: value}

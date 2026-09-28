@@ -219,7 +219,8 @@ def is_manual_playable_too_long_candidate(candidate):
         and isinstance(source_lines, list)
         and bool(source_lines)
         and isinstance(metrics, dict)
-        and metrics.get("technical_flags") == ["too-long"]
+        and "too-long" in metrics.get("technical_flags", ())
+        and set(metrics["technical_flags"]) <= {"too-long", "excessive-silence"}
         and all(
             isinstance(line, dict)
             and is_playable_main_voice_reference(

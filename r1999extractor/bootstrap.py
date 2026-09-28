@@ -54,6 +54,7 @@ from r1999extractor.structured_story import audit_story_like_tables
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
 PLAYER_VOICE_CANDIDATES_VERSION = 4
+PLAYER_VOICE_CANDIDATE_CATALOG_VERSION = 5
 DISCOVERY_LOGGER_NAME = "r1999extractor.discovery"
 
 
@@ -140,7 +141,7 @@ def prepare_player_voice_candidates(
                 "playable_speech_only": use_playable_speech_only,
                 "reference_decode_version": REFERENCE_DECODE_VERSION,
                 "unlinked_bank_media_policy_version": 2,
-                "candidate_catalog_version": 4,
+                "candidate_catalog_version": PLAYER_VOICE_CANDIDATE_CATALOG_VERSION,
                 "bank_index_sha256": sha256_file(bank_index),
                 "roles": [normalize_character_name(role) for role in roles],
             },

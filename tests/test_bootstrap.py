@@ -500,18 +500,25 @@ class BootstrapTest(unittest.TestCase):
                     new_policy = prepare_player_voice_candidates(
                         roles=("Hero",), data_directory=root
                     )
+                with patch(
+                    "r1999extractor.bootstrap.PLAYER_VOICE_CANDIDATE_CATALOG_VERSION", 6
+                ):
+                    new_catalog = prepare_player_voice_candidates(
+                        roles=("Hero",), data_directory=root
+                    )
                 (output / "english-bank-index.json").write_text(
                     '{"rebuilt":true}', encoding="utf-8"
                 )
                 new_index = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
                 self.assertNotEqual(first, new_policy)
+                self.assertNotEqual(first, new_catalog)
                 self.assertNotEqual(first, new_index)
 
             manifest = json.loads(first.read_text(encoding="utf-8"))
             evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
 
         self.assertEqual(first, second)
-        self.assertEqual(builds, [("Hero",)] * 3)
+        self.assertEqual(builds, [("Hero",)] * 4)
         portraits.assert_any_call(
             bundles.resolve(),
             {"hero.png"},
