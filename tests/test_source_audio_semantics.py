@@ -83,6 +83,65 @@ class SourceAudioSemanticsTest(unittest.TestCase):
             2,
         )
 
+    def test_ignores_untimed_and_absent_unknown_cues_in_selected_chapter(self):
+        payload = b"exact-stop"
+
+        class Resolver:
+            @staticmethod
+            def read_single_available_media(_resolution):
+                return 11, payload
+
+        untimed = _record(2, "No measured duration.", 22, b"untimed")
+        untimed.update(
+            source_audio_duration_seconds=None,
+            source_audio_duration_media_id=None,
+            source_audio_duration_media_sha256=None,
+        )
+        absent = _record(3, "No game audio.", 33, b"absent")
+        absent.update(
+            source_audio_status="absent",
+            source_audio_duration_seconds=None,
+            source_audio_duration_media_id=None,
+            source_audio_duration_media_sha256=None,
+        )
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "timed.jsonl"
+            evidence = root / "evidence.json"
+            successor = root / "semantic.jsonl"
+            model = root / "model"
+            model.mkdir()
+            (model / "config.json").write_text("model", encoding="utf-8")
+            write_story_index_document(
+                source,
+                {"game": "Reverse: 1999", "language": "en"},
+                [_record(1, "Stop it.", 11, payload), untimed, absent],
+            )
+
+            with patch(
+                "r1999extractor.source_audio_semantics._decode_wem",
+                return_value=b"wav",
+            ):
+                result = publish_source_audio_semantic_evidence(
+                    source,
+                    root / "unused-bank-index.json",
+                    evidence,
+                    successor,
+                    model,
+                    chapters=("7",),
+                    resolver=Resolver(),
+                    transcriber=lambda _payload: "Stop it.",
+                )
+            authority = load_source_audio_semantic_evidence(evidence)
+
+        outcomes = {record.sequence: record.to_record() for record in result.records}
+        self.assertEqual(len(authority["entries"]), 1)
+        self.assertEqual(result.metadata["source_audio_semantics"]["applied_count"], 1)
+        self.assertEqual(outcomes[1]["source_audio_completeness"], "full")
+        self.assertEqual(outcomes[2]["source_audio_completeness"], "unknown")
+        self.assertEqual(outcomes[3]["source_audio_completeness"], "unknown")
+
     def test_same_media_with_different_displayed_text_is_not_reused(self):
         payload = b"shared-media"
 

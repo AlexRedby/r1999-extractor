@@ -175,10 +175,10 @@ def publish_source_audio_semantic_evidence(
     document = load_story_index_document(source)
     selected_chapters = {str(chapter).strip() for chapter in chapters if str(chapter).strip()}
     candidates = [
-        line.to_record()
+        record
         for line in document.records
-        if line.to_record().get("source_audio_completeness") == "unknown"
-        and (not selected_chapters or line.chapter in selected_chapters)
+        if (not selected_chapters or line.chapter in selected_chapters)
+        and _is_unknown_timed_source_cue(record := line.to_record())
     ]
     if not candidates:
         raise SourceAudioSemanticEvidenceError(
@@ -424,7 +424,7 @@ def annotate_story_index_source_audio_semantics(
     for line in document.records:
         record = line.to_record()
         selected = not selected_chapters or line.chapter in selected_chapters
-        if selected and record.get("source_audio_completeness") == "unknown":
+        if selected and _is_unknown_timed_source_cue(record):
             identity = _record_identity(record)
             key = (locale, identity[2], identity[4])
             entry = index.get(key)
@@ -457,6 +457,17 @@ def annotate_story_index_source_audio_semantics(
         "applied_count": applied,
     }
     return write_story_index_document(destination, metadata, records)
+
+
+def _is_unknown_timed_source_cue(record):
+    return (
+        record.get("source_audio_status") == "available"
+        and record.get("source_audio_completeness") == "unknown"
+        and (
+            record.get("source_audio_duration_media_id") is not None
+            or record.get("source_audio_duration_media_sha256") is not None
+        )
+    )
 
 
 def _record_identity(record):
