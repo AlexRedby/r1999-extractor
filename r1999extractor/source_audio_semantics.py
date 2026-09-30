@@ -25,7 +25,7 @@ from vntts_artifacts.story_index import (
 from r1999extractor.reverse1999_index import bank_index_staleness_reasons
 from r1999extractor.source_audio_duration import _audio_resolution
 from r1999extractor.story_audio import StoryAudioResolutionError, StoryAudioResolver
-from r1999extractor.wwise import AudioConversionError, convert_audio
+from r1999extractor.wwise import AudioConversionError, convert_audio, resolve_decoder
 
 SEMANTIC_EVIDENCE_SCHEMA = "r1999.source-audio-semantic-evidence"
 SEMANTIC_EVIDENCE_VERSION = 1
@@ -157,6 +157,7 @@ def publish_source_audio_semantic_evidence(
     transcriber=None,
     resolver=None,
     model_sha256=None,
+    cache_dir=None,
 ):
     """Transcribe unknown exact media and publish evidence plus a story successor."""
     source = Path(story_index).expanduser().resolve()
@@ -188,10 +189,21 @@ def publish_source_audio_semantic_evidence(
     model_path = Path(model_directory).expanduser().resolve()
     before_model_sha256 = model_sha256 or sha256_control_path(model_path)
     _require_sha256(before_model_sha256, "ASR model SHA-256")
-    transcriber = transcriber or WhisperTranscriber(model_path, device=device)
     resolver = resolver or _load_resolver(bank_index)
+    cache_root = Path(cache_dir) / "semantics" if cache_dir is not None else None
+    if cache_root is not None:
+        try:
+            decoder = resolve_decoder(decoder)
+            decoder_stat = Path(decoder).stat()
+            decoder_sha256 = hashlib.sha256(Path(decoder).read_bytes()).hexdigest()
+        except (OSError, AudioConversionError):
+            cache_root = None
 
     entries = {}
+    cached_transcripts = {}
+    new_cache_entries = []
+    cache_hits = 0
+    asr_calls = 0
     for record in candidates:
         identity = _record_identity(record)
         resolution = _audio_resolution(record)
@@ -212,8 +224,50 @@ def publish_source_audio_semantic_evidence(
             raise SourceAudioSemanticEvidenceError(
                 f"Timed source media changed for {record['line_id']}"
             )
-        wav_payload = _decode_wem(payload, media_id, decoder)
-        observed = str(transcriber(wav_payload) or "").strip()
+        cache_identity = {
+            "media_sha256": identity[2],
+            "decoder_sha256": decoder_sha256 if cache_root is not None else None,
+            "model_sha256": before_model_sha256,
+            "device": str(device),
+            "locale": document.metadata.get("language"),
+            "displayed_text_sha256": identity[3],
+            "normalized_displayed_text_sha256": identity[4],
+            "method": SEMANTIC_EVIDENCE_METHOD,
+        }
+        cache_key = _canonical_sha256(cache_identity)
+        cache_path = cache_root / f"{cache_key}.json" if cache_root is not None else None
+        observed = cached_transcripts.get(cache_key)
+        if observed is None and cache_path is not None:
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                transcript = cached.get("observed_transcript")
+                if (
+                    cached.get("identity") == cache_identity
+                    and isinstance(transcript, str)
+                    and normalize_semantic_text(transcript)
+                    and cached.get("checksum")
+                    == _canonical_sha256(
+                        {"identity": cache_identity, "observed_transcript": transcript}
+                    )
+                ):
+                    observed = transcript
+                    cache_hits += 1
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+        if observed is None:
+            wav_payload = _decode_wem(payload, media_id, decoder)
+            if transcriber is None:
+                transcriber = WhisperTranscriber(model_path, device=device)
+            observed = str(transcriber(wav_payload) or "").strip()
+            asr_calls += 1
+            if observed and cache_path is not None:
+                cached = {
+                    "identity": cache_identity,
+                    "observed_transcript": observed,
+                }
+                cached["checksum"] = _canonical_sha256(cached)
+                new_cache_entries.append((cache_path, cached))
+        cached_transcripts[cache_key] = observed
         if not observed:
             raise SourceAudioSemanticEvidenceError(
                 f"ASR returned no transcript for {record['line_id']}"
@@ -258,6 +312,26 @@ def publish_source_audio_semantic_evidence(
     after_model_sha256 = model_sha256 or sha256_control_path(model_path)
     if after_model_sha256 != before_model_sha256:
         raise SourceAudioSemanticEvidenceError("ASR model changed during transcription")
+    if cache_root is not None:
+        try:
+            current_stat = Path(decoder).stat()
+        except OSError as error:
+            raise SourceAudioSemanticEvidenceError(
+                "Source-audio decoder disappeared during transcription"
+            ) from error
+        if (
+            current_stat.st_size != decoder_stat.st_size
+            or current_stat.st_mtime_ns != decoder_stat.st_mtime_ns
+        ):
+            raise SourceAudioSemanticEvidenceError(
+                "Source-audio decoder changed during transcription"
+            )
+    for cache_path, cached in new_cache_entries:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(cache_path, cached, sort_keys=True)
+        except OSError:
+            pass
     canonical_entries = []
     for entry in sorted(
         entries.values(),
@@ -297,6 +371,8 @@ def publish_source_audio_semantic_evidence(
         evidence_destination,
         story_destination,
         chapters=selected_chapters,
+        cache_hits=cache_hits,
+        asr_calls=asr_calls,
     )
 
 
@@ -396,6 +472,8 @@ def annotate_story_index_source_audio_semantics(
     output,
     *,
     chapters=(),
+    cache_hits=0,
+    asr_calls=0,
 ):
     """Apply exact evidence matches and reject any unresolved selected unknown."""
     source = Path(story_index).expanduser().resolve()
@@ -455,6 +533,8 @@ def annotate_story_index_source_audio_semantics(
         "method": SEMANTIC_EVIDENCE_METHOD,
         "selected_chapters": sorted(selected_chapters),
         "applied_count": applied,
+        "cache_hits": cache_hits,
+        "asr_calls": asr_calls,
     }
     return write_story_index_document(destination, metadata, records)
 
@@ -538,6 +618,7 @@ def create_parser():
     parser.add_argument("--story-output", type=Path, required=True)
     parser.add_argument("--chapter", action="append", default=[])
     parser.add_argument("--decoder", default="vgmstream-cli")
+    parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--device", default="cpu")
     return parser
 
@@ -553,6 +634,7 @@ def main(arguments=None):
             options.model,
             chapters=options.chapter,
             decoder=options.decoder,
+            cache_dir=options.cache_dir,
             device=options.device,
         )
     except (
@@ -564,7 +646,11 @@ def main(arguments=None):
         print(error, file=sys.stderr)
         return 1
     semantics = result.metadata["source_audio_semantics"]
-    print(f"Applied {semantics['applied_count']} exact semantic decisions; wrote {result.path}")
+    print(
+        f"Applied {semantics['applied_count']} exact semantic decisions "
+        f"({semantics['cache_hits']} cached, {semantics['asr_calls']} ASR calls); "
+        f"wrote {result.path}"
+    )
     return 0
 
 

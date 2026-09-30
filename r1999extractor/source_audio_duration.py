@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from vntts_artifacts.atomic_io import atomic_write_json
 from vntts_artifacts.story_index import (
     StoryIndexError,
     load_story_index_document,
@@ -40,11 +41,21 @@ class SourceAudioTiming:
 class SourceAudioDurationProbe:
     """Measure only events bound to one exact installed media object."""
 
-    def __init__(self, resolver, *, decoder="vgmstream-cli", runner=subprocess.run):
+    def __init__(self, resolver, *, decoder="vgmstream-cli", runner=subprocess.run, cache_dir=None):
         self.resolver = resolver
         self.decoder = resolve_decoder(decoder)
         self.runner = runner
         self._cache = {}
+        self.cache_hits = 0
+        self.decoder_probes = 0
+        self.cache_dir = Path(cache_dir) / "duration" if cache_dir is not None else None
+        self.decoder_sha256 = None
+        if self.cache_dir is not None:
+            try:
+                self.decoder_stat = Path(self.decoder).stat()
+                self.decoder_sha256 = hashlib.sha256(Path(self.decoder).read_bytes()).hexdigest()
+            except OSError:
+                self.cache_dir = None
 
     def probe(self, resolution):
         try:
@@ -65,10 +76,52 @@ class SourceAudioDurationProbe:
                 cached.sample_count,
                 cached.decoder_version,
             )
+        cache_path = (
+            self.cache_dir / f"{digest}-{self.decoder_sha256}.json"
+            if self.cache_dir is not None
+            else None
+        )
+        if cache_path is not None:
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                current_stat = Path(self.decoder).stat()
+                sample_rate = _positive_int(cached.get("sample_rate"))
+                sample_count = _positive_int(cached.get("sample_count"))
+                decoder_version = cached.get("decoder_version")
+                if (
+                    cached.get("checksum")
+                    == _cache_checksum(
+                        {key: value for key, value in cached.items() if key != "checksum"}
+                    )
+                    and current_stat.st_size == self.decoder_stat.st_size
+                    and current_stat.st_mtime_ns == self.decoder_stat.st_mtime_ns
+                    and cached.get("media_sha256") == digest
+                    and cached.get("decoder_sha256") == self.decoder_sha256
+                    and sample_rate is not None
+                    and sample_count is not None
+                    and isinstance(decoder_version, str)
+                    and decoder_version.strip()
+                ):
+                    duration = sample_count / sample_rate
+                    if math.isfinite(duration) and 0 < duration <= 600:
+                        timing = SourceAudioTiming(
+                            round(duration, 6),
+                            media_id,
+                            digest,
+                            sample_rate,
+                            sample_count,
+                            decoder_version,
+                        )
+                        self._cache[digest] = timing
+                        self.cache_hits += 1
+                        return timing
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
         try:
             with TemporaryDirectory(prefix="r1999-source-duration-") as temporary_directory:
                 source = Path(temporary_directory) / f"{media_id}.wem"
                 source.write_bytes(payload)
+                self.decoder_probes += 1
                 result = self.runner(
                     [self.decoder, "-i", "-I", str(source)],
                     capture_output=True,
@@ -97,7 +150,35 @@ class SourceAudioDurationProbe:
             sample_count,
             decoder_version,
         )
+        if self.cache_dir is not None:
+            try:
+                current_stat = Path(self.decoder).stat()
+                if (
+                    current_stat.st_size != self.decoder_stat.st_size
+                    or current_stat.st_mtime_ns != self.decoder_stat.st_mtime_ns
+                ):
+                    return None
+            except OSError:
+                return None
         self._cache[digest] = timing
+        if cache_path is not None:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cached = {
+                    "media_sha256": digest,
+                    "decoder_sha256": self.decoder_sha256,
+                    "sample_rate": sample_rate,
+                    "sample_count": sample_count,
+                    "decoder_version": decoder_version,
+                }
+                cached["checksum"] = _cache_checksum(cached)
+                atomic_write_json(
+                    cache_path,
+                    cached,
+                    sort_keys=True,
+                )
+            except OSError:
+                pass
         return timing
 
 
@@ -119,6 +200,12 @@ def _positive_int(value):
     return value
 
 
+def _cache_checksum(record):
+    return hashlib.sha256(
+        json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def annotate_story_index_source_audio_durations(
     story_index,
     bank_index,
@@ -127,6 +214,7 @@ def annotate_story_index_source_audio_durations(
     chapters=(),
     decoder="vgmstream-cli",
     probe=None,
+    cache_dir=None,
 ):
     """Publish a new story index with verified timing on selected source voices."""
     source = Path(story_index).expanduser().resolve()
@@ -151,6 +239,7 @@ def annotate_story_index_source_audio_durations(
         probe = SourceAudioDurationProbe(
             StoryAudioResolver({}, bank_document),
             decoder=decoder,
+            cache_dir=cache_dir,
         )
 
     records = []
@@ -195,6 +284,8 @@ def annotate_story_index_source_audio_durations(
         "eligible_count": eligible,
         "measured_count": measured,
         "untimed_count": eligible - measured,
+        "cache_hits": getattr(probe, "cache_hits", 0),
+        "decoder_probes": getattr(probe, "decoder_probes", 0),
     }
     return write_story_index_document(destination, metadata, records)
 
@@ -236,6 +327,7 @@ def create_parser():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--chapter", action="append", default=[])
     parser.add_argument("--decoder", default="vgmstream-cli")
+    parser.add_argument("--cache-dir", type=Path)
     return parser
 
 
@@ -248,6 +340,7 @@ def main(arguments=None):
             options.output,
             chapters=options.chapter,
             decoder=options.decoder,
+            cache_dir=options.cache_dir,
         )
     except (OSError, StoryAudioResolutionError, StoryIndexError) as error:
         print(error, file=sys.stderr)
@@ -255,7 +348,8 @@ def main(arguments=None):
     timing = result.metadata["source_audio_timing"]
     print(
         f"Measured {timing['measured_count']}/{timing['eligible_count']} exact source "
-        f"voices; wrote {result.path}"
+        f"voices ({timing['cache_hits']} cached, {timing['decoder_probes']} decoder probes); "
+        f"wrote {result.path}"
     )
     return 0
 

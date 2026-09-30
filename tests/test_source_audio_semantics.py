@@ -234,6 +234,111 @@ class SourceAudioSemanticsTest(unittest.TestCase):
             ):
                 load_source_audio_semantic_evidence(evidence)
 
+    def test_shared_cache_analyzes_only_new_stage_and_invalidates_changed_inputs(self):
+        payloads = {11: b"stage-a", 22: b"stage-b"}
+
+        class Resolver:
+            @staticmethod
+            def read_single_available_media(resolution):
+                media_id = resolution.media_ids[0]
+                return media_id, payloads[media_id]
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "model"
+            model.mkdir()
+            (model / "config.json").write_text("model-one", encoding="utf-8")
+            decoder = root / "decoder"
+            decoder.write_bytes(b"decoder-one")
+            records = [
+                _record(1, "Stop it.", 11, payloads[11]),
+                _record(2, "Come back.", 22, payloads[22]),
+            ]
+            records[1]["chapter"] = "8"
+            transcripts = {b"stage-a": "Stop it.", b"stage-b": "Come back."}
+            calls = []
+
+            def transcribe(wav):
+                calls.append(wav)
+                return transcripts[wav]
+
+            def publish(name, chapters, *, changed_records=None, language="en", device="cpu"):
+                source = root / f"{name}-timed.jsonl"
+                write_story_index_document(
+                    source,
+                    {"game": "Reverse: 1999", "language": language},
+                    changed_records or records,
+                )
+                with patch(
+                    "r1999extractor.source_audio_semantics._decode_wem",
+                    side_effect=lambda payload, _media_id, _decoder: payload,
+                ):
+                    return publish_source_audio_semantic_evidence(
+                        source,
+                        root / "unused-bank-index.json",
+                        root / f"{name}-evidence.json",
+                        root / f"{name}-story.jsonl",
+                        model,
+                        chapters=chapters,
+                        decoder=decoder,
+                        resolver=Resolver(),
+                        transcriber=transcribe,
+                        cache_dir=root / "cache",
+                        device=device,
+                    )
+
+            first = publish("first", ("7",))
+            second = publish("second", ("7", "8"))
+            self.assertEqual(first.metadata["source_audio_semantics"]["asr_calls"], 1)
+            self.assertEqual(second.metadata["source_audio_semantics"]["cache_hits"], 1)
+            self.assertEqual(second.metadata["source_audio_semantics"]["asr_calls"], 1)
+            self.assertEqual(calls, [b"stage-a", b"stage-b"])
+            self.assertEqual(
+                len(load_source_audio_semantic_evidence(root / "second-evidence.json")["entries"]),
+                2,
+            )
+
+            for cache_file in (root / "cache" / "semantics").glob("*.json"):
+                cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                if cached["identity"]["media_sha256"] == hashlib.sha256(payloads[22]).hexdigest():
+                    cache_file.write_text("{", encoding="utf-8")
+                    break
+            else:
+                self.fail("Stage B semantic cache entry was not saved")
+            repaired = publish("repaired", ("7", "8"))
+            self.assertEqual(repaired.metadata["source_audio_semantics"]["cache_hits"], 1)
+            self.assertEqual(repaired.metadata["source_audio_semantics"]["asr_calls"], 1)
+
+            changed = [dict(value) for value in records]
+            changed[1]["text"] = "Please come back."
+            changed[1]["text_sha256"] = hashlib.sha256(
+                changed[1]["text"].encode("utf-8")
+            ).hexdigest()
+            third = publish("third", ("7", "8"), changed_records=changed)
+            self.assertEqual(third.metadata["source_audio_semantics"]["cache_hits"], 1)
+            self.assertEqual(third.metadata["source_audio_semantics"]["asr_calls"], 1)
+
+            payloads[22] = b"changed-stage-b"
+            transcripts[payloads[22]] = "Come back."
+            changed_media = [dict(value) for value in records]
+            changed_media[1]["source_audio_duration_media_sha256"] = hashlib.sha256(
+                payloads[22]
+            ).hexdigest()
+            media_result = publish("changed-media", ("7", "8"), changed_records=changed_media)
+            self.assertEqual(media_result.metadata["source_audio_semantics"]["cache_hits"], 1)
+            self.assertEqual(media_result.metadata["source_audio_semantics"]["asr_calls"], 1)
+
+            (model / "config.json").write_text("model-two", encoding="utf-8")
+            fourth = publish("fourth", ("7", "8"), changed_records=changed_media)
+            self.assertEqual(fourth.metadata["source_audio_semantics"]["asr_calls"], 2)
+
+            decoder.write_bytes(b"decoder-two")
+            fifth = publish("fifth", ("7", "8"), changed_records=changed_media)
+            self.assertEqual(fifth.metadata["source_audio_semantics"]["asr_calls"], 2)
+
+            sixth = publish("sixth", ("7", "8"), changed_records=changed_media, device="cuda")
+            self.assertEqual(sixth.metadata["source_audio_semantics"]["asr_calls"], 2)
+
 
 def _record(sequence, text, media_id, payload):
     return {

@@ -98,6 +98,68 @@ class SourceAudioDurationTest(unittest.TestCase):
             )
         )
 
+    def test_shared_cache_reuses_only_exact_media_and_decoder(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            decoder = root / "decoder"
+            decoder.write_bytes(b"decoder-one")
+            payload = [b"first-wem"]
+
+            class Resolver:
+                @staticmethod
+                def read_single_available_media(_resolution):
+                    return 99, payload[0]
+
+            calls = []
+
+            def runner(command, **_options):
+                calls.append(command)
+                return CompletedProcess(
+                    command,
+                    0,
+                    stdout=json.dumps(
+                        {"version": "r-test", "sampleRate": 24000, "playSamples": 30000}
+                    ),
+                    stderr="",
+                )
+
+            resolution = AudioResolution(
+                "installed",
+                "resolved_local_media",
+                bank="voice.bnk",
+                media_ids=(99,),
+                available_media_ids=(99,),
+            )
+
+            def fresh_probe():
+                return SourceAudioDurationProbe(
+                    Resolver(), decoder=decoder, runner=runner, cache_dir=root / "cache"
+                )
+
+            first = fresh_probe()
+            self.assertEqual(first.probe(resolution).duration_seconds, 1.25)
+            second = fresh_probe()
+            self.assertEqual(second.probe(resolution).duration_seconds, 1.25)
+            self.assertEqual(second.cache_hits, 1)
+            self.assertEqual(len(calls), 1)
+
+            cache_file = next((root / "cache" / "duration").glob("*.json"))
+            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+            cached["sample_count"] = 1
+            cache_file.write_text(json.dumps(cached), encoding="utf-8")
+            self.assertEqual(fresh_probe().probe(resolution).duration_seconds, 1.25)
+            self.assertEqual(len(calls), 2)
+
+            payload[0] = b"changed-wem"
+            self.assertEqual(
+                fresh_probe().probe(resolution).media_sha256, hashlib.sha256(payload[0]).hexdigest()
+            )
+            self.assertEqual(len(calls), 3)
+
+            decoder.write_bytes(b"decoder-two")
+            self.assertEqual(fresh_probe().probe(resolution).duration_seconds, 1.25)
+            self.assertEqual(len(calls), 4)
+
     def test_publishes_lossless_story_index_with_verified_timing_contract(self):
         class Probe:
             @staticmethod
