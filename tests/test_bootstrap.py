@@ -500,9 +500,7 @@ class BootstrapTest(unittest.TestCase):
                     new_policy = prepare_player_voice_candidates(
                         roles=("Hero",), data_directory=root
                     )
-                with patch(
-                    "r1999extractor.bootstrap.PLAYER_VOICE_CANDIDATE_CATALOG_VERSION", 6
-                ):
+                with patch("r1999extractor.bootstrap.PLAYER_VOICE_CANDIDATE_CATALOG_VERSION", 6):
                     new_catalog = prepare_player_voice_candidates(
                         roles=("Hero",), data_directory=root
                     )
@@ -536,9 +534,7 @@ class BootstrapTest(unittest.TestCase):
             ["line:a", "line:source", "line:Z"],
         )
         self.assertEqual(evidence["variants"][0]["portrait_image_sha256"], "a" * 64)
-        self.assertEqual(
-            evidence["variants"][0]["candidate_origin"], "exact_bank_unrouted_media"
-        )
+        self.assertEqual(evidence["variants"][0]["candidate_origin"], "exact_bank_unrouted_media")
 
     def test_player_candidates_use_external_target_and_invalidate_both_indexes(self):
         with TemporaryDirectory() as directory:
@@ -558,9 +554,7 @@ class BootstrapTest(unittest.TestCase):
                 "speaker": "Centurion",
                 "voice_character": "Centurion",
                 "text": "Hello there welcome friend.",
-                "text_sha256": hashlib.sha256(
-                    b"Hello there welcome friend."
-                ).hexdigest(),
+                "text_sha256": hashlib.sha256(b"Hello there welcome friend.").hexdigest(),
                 "source_audio_status": "available",
                 "source_audio_id": "play_hero3141_mainvoc_1",
                 "source_event": "play_hero3141_mainvoc_1",
@@ -598,9 +592,7 @@ class BootstrapTest(unittest.TestCase):
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
                     "story_index": str(Path(source).resolve()),
-                    "story_index_sha256": hashlib.sha256(
-                        Path(source).read_bytes()
-                    ).hexdigest(),
+                    "story_index_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest(),
                     "groups": [
                         {
                             "character": "Centurion",
@@ -711,9 +703,7 @@ class BootstrapTest(unittest.TestCase):
                 report_path.write_text(json.dumps(report), encoding="utf-8")
                 return report_path, report
 
-            with patch(
-                "r1999extractor.bootstrap.build_story_voice_candidates", side_effect=build
-            ):
+            with patch("r1999extractor.bootstrap.build_story_voice_candidates", side_effect=build):
                 with self.assertRaisesRegex(BootstrapError, "report story index changed"):
                     prepare_player_voice_candidates(roles=("Centurion",), data_directory=root)
 
@@ -744,9 +734,7 @@ class BootstrapTest(unittest.TestCase):
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
                     "story_index": str(Path(source).resolve()),
-                    "story_index_sha256": hashlib.sha256(
-                        Path(source).read_bytes()
-                    ).hexdigest(),
+                    "story_index_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest(),
                     "groups": [],
                     "candidates": [],
                 }
@@ -754,9 +742,7 @@ class BootstrapTest(unittest.TestCase):
                 report_path.write_text(json.dumps(report), encoding="utf-8")
                 return report_path, report
 
-            with patch(
-                "r1999extractor.bootstrap.build_story_voice_candidates", side_effect=build
-            ):
+            with patch("r1999extractor.bootstrap.build_story_voice_candidates", side_effect=build):
                 with self.assertRaisesRegex(BootstrapError, "report story index changed"):
                     prepare_player_voice_candidates(roles=("Centurion",), data_directory=root)
 

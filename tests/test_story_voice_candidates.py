@@ -210,11 +210,7 @@ class StoryVoiceCandidateTest(unittest.TestCase):
                     path=bank,
                     sha256=hashlib.sha256(payload).hexdigest(),
                     media={line["source_media_ids"][0]: payload},
-                    routes={
-                        wwise_event_id(line["source_event"]): tuple(
-                            line["source_media_ids"]
-                        )
-                    },
+                    routes={wwise_event_id(line["source_event"]): tuple(line["source_media_ids"])},
                 )
             bank_index = root / "banks.json"
             bank_index.write_text(
@@ -627,9 +623,7 @@ class StoryVoiceCandidateTest(unittest.TestCase):
                 include_unlinked_bank_media=True,
             )
 
-        self.assertEqual(
-            {candidate["media_id"] for candidate in report["candidates"]}, {10}
-        )
+        self.assertEqual({candidate["media_id"] for candidate in report["candidates"]}, {10})
 
     def test_player_mode_accepts_multiple_portraits_of_one_character(self):
         with TemporaryDirectory() as directory:

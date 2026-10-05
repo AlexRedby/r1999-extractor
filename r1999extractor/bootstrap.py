@@ -203,8 +203,7 @@ def _publish_player_voice_manifest(
         not isinstance(report, dict)
         or report.get("schema") != REPORT_SCHEMA
         or report.get("schema_version") not in SUPPORTED_REPORT_VERSIONS
-        or Path(report.get("story_index", "")).expanduser().resolve()
-        != reference_story_index
+        or Path(report.get("story_index", "")).expanduser().resolve() != reference_story_index
         or report.get("story_index_sha256") != reference_story_sha256
         or sha256_file(reference_story_index) != reference_story_sha256
         or sha256_file(target_story_index) != target_story_sha256

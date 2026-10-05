@@ -223,9 +223,7 @@ def is_manual_playable_too_long_candidate(candidate):
         and set(metrics["technical_flags"]) <= {"too-long", "excessive-silence"}
         and all(
             isinstance(line, dict)
-            and is_playable_main_voice_reference(
-                line.get("line_id"), candidate.get("source_bank")
-            )
+            and is_playable_main_voice_reference(line.get("line_id"), candidate.get("source_bank"))
             for line in source_lines
         )
     )
@@ -303,9 +301,7 @@ def _available_voice_identities_by_bank(story_index):
             if isinstance(record.get("portrait"), str) and str(record["portrait"]).strip()
             else None
         )
-        identities.setdefault(bank, set()).add(
-            (normalize_character_name(character), portrait)
-        )
+        identities.setdefault(bank, set()).add((normalize_character_name(character), portrait))
     return identities
 
 
@@ -463,13 +459,9 @@ def build_story_voice_candidates(
                         for character, _portrait, _bank in identities
                     }
                     complete_characters = {
-                        character
-                        for character, _portrait in complete_identities.get(bank, ())
+                        character for character, _portrait in complete_identities.get(bank, ())
                     }
-                    if (
-                        len(selected_characters) != 1
-                        or complete_characters != selected_characters
-                    ):
+                    if len(selected_characters) != 1 or complete_characters != selected_characters:
                         continue
                 if len(identities) != 1:
                     if include_unlinked_bank_media and not include_all_bank_media:
