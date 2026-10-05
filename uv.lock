@@ -256,7 +256,7 @@ wheels = [
 [[package]]
 name = "durable-file"
 version = "0.1.0"
-source = { git = "https://github.com/AlexRedby/vntts-artifacts.git?rev=durable-file-v0.1.0#3557679180502da3bf2695dd2646224ef012c6b6" }
+source = { git = "https://github.com/AlexRedby/vntts-artifacts.git?rev=0e22c629dde9de070eb7f13c87609e5905277ab9#0e22c629dde9de070eb7f13c87609e5905277ab9" }
 
 [[package]]
 name = "etcpak"
@@ -724,7 +724,7 @@ requires-dist = [
     { name = "platformdirs", specifier = ">=4.3,<5" },
     { name = "pyside6", marker = "extra == 'ui'", specifier = "==6.10.1" },
     { name = "unitypy", specifier = ">=1.25,<2" },
-    { name = "vntts-artifacts", extras = ["audio"], git = "https://github.com/AlexRedby/vntts-artifacts.git?rev=19e6035986eedae6bbda966d7d5cff8307c9f574" },
+    { name = "vntts-artifacts", extras = ["audio"], git = "https://github.com/AlexRedby/vntts-artifacts.git?rev=d4c234164570c070b6a8e693cc2edc9d93133411" },
 ]
 provides-extras = ["ui"]
 
@@ -873,7 +873,7 @@ wheels = [
 [[package]]
 name = "vntts-artifacts"
 version = "0.7.2"
-source = { git = "https://github.com/AlexRedby/vntts-artifacts.git?rev=19e6035986eedae6bbda966d7d5cff8307c9f574#19e6035986eedae6bbda966d7d5cff8307c9f574" }
+source = { git = "https://github.com/AlexRedby/vntts-artifacts.git?rev=d4c234164570c070b6a8e693cc2edc9d93133411#d4c234164570c070b6a8e693cc2edc9d93133411" }
 dependencies = [
     { name = "durable-file" },
 ]
