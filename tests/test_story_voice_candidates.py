@@ -332,6 +332,7 @@ class StoryVoiceCandidateTest(unittest.TestCase):
                     bank,
                 )
 
+            events = []
             report_path, report = build_story_voice_candidates(
                 story,
                 bank_index,
@@ -341,7 +342,27 @@ class StoryVoiceCandidateTest(unittest.TestCase):
                 bank_loader=lambda _index, _filename: snapshot,
                 media_decoder=decode,
                 analyzer=clean_metrics,
+                progress=events.append,
             )
+            self.assertEqual(
+                [(event["stage"], event["processed"], event["total"], event["state"])
+                 for event in events],
+                [("references", 0, 2, "analyzing"), ("references", 1, 2, "analyzing"),
+                 ("references", 2, 2, "analyzing"), ("references", 2, 2, "publishing")],
+            )
+
+            def fail_analysis(_path):
+                raise RuntimeError("analysis failed")
+
+            failed_events = []
+            with self.assertRaisesRegex(RuntimeError, "analysis failed"):
+                build_story_voice_candidates(
+                    story, bank_index, ["Hero"], root / "failed", decoder="true",
+                    bank_loader=lambda _index, _filename: snapshot, media_decoder=decode,
+                    analyzer=fail_analysis, progress=failed_events.append,
+                )
+            self.assertEqual([event["processed"] for event in failed_events], [0])
+            self.assertFalse((root / "failed").exists())
             reference_digest = hashlib.sha256(
                 (report_path.parent / report["candidates"][0]["reference"]).read_bytes()
             ).hexdigest()

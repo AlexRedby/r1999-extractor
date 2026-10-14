@@ -16,6 +16,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 from vntts_artifacts.atomic_io import atomic_write_json
+from vntts_artifacts.file_integrity import sha256_file
 from vntts_artifacts.story_index import (
     StoryIndexError,
     load_story_index_document,
@@ -24,6 +25,11 @@ from vntts_artifacts.story_index import (
 
 from r1999extractor.reverse1999_index import bank_index_staleness_reasons
 from r1999extractor.source_audio_duration import _audio_resolution
+from r1999extractor.source_audio_progress import (
+    SourceAudioProgressCallback,
+    SourceAudioProgressFile,
+    report_source_audio_progress,
+)
 from r1999extractor.story_audio import StoryAudioResolutionError, StoryAudioResolver
 from r1999extractor.wwise import AudioConversionError, convert_audio, resolve_decoder
 
@@ -158,6 +164,7 @@ def publish_source_audio_semantic_evidence(
     resolver=None,
     model_sha256=None,
     cache_dir=None,
+    progress: SourceAudioProgressCallback | None = None,
 ):
     """Transcribe unknown exact media and publish evidence plus a story successor."""
     source = Path(story_index).expanduser().resolve()
@@ -173,6 +180,7 @@ def publish_source_audio_semantic_evidence(
                 f"Semantic evidence destination already exists: {destination}"
             )
 
+    source_sha256 = sha256_file(source)
     document = load_story_index_document(source)
     selected_chapters = {str(chapter).strip() for chapter in chapters if str(chapter).strip()}
     candidates = [
@@ -181,6 +189,7 @@ def publish_source_audio_semantic_evidence(
         if (not selected_chapters or line.chapter in selected_chapters)
         and _is_unknown_timed_source_cue(record := line.to_record())
     ]
+    report_source_audio_progress(progress, "semantics", 0, len(candidates))
     if not candidates:
         raise SourceAudioSemanticEvidenceError(
             "No unknown timed source-audio cues match the requested chapters"
@@ -204,7 +213,7 @@ def publish_source_audio_semantic_evidence(
     new_cache_entries = []
     cache_hits = 0
     asr_calls = 0
-    for record in candidates:
+    for processed, record in enumerate(candidates, start=1):
         identity = _record_identity(record)
         resolution = _audio_resolution(record)
         if resolution is None:
@@ -308,6 +317,7 @@ def publish_source_audio_semantic_evidence(
                 "Conflicting transcripts for one semantic source-audio identity"
             )
         entry["source_line_ids"].append(record["line_id"])
+        report_source_audio_progress(progress, "semantics", processed, len(candidates))
 
     after_model_sha256 = model_sha256 or sha256_control_path(model_path)
     if after_model_sha256 != before_model_sha256:
@@ -351,7 +361,7 @@ def publish_source_audio_semantic_evidence(
         "schema": SEMANTIC_EVIDENCE_SCHEMA,
         "schema_version": SEMANTIC_EVIDENCE_VERSION,
         "locale": document.metadata.get("language"),
-        "source_story_index_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "source_story_index_sha256": source_sha256,
         "model": {
             "kind": "whisper",
             "snapshot": model_path.name,
@@ -364,10 +374,16 @@ def publish_source_audio_semantic_evidence(
     authority["evidence_id"] = _canonical_sha256(authority)
     authority["generated_at"] = datetime.now(timezone.utc).isoformat()
     validate_source_audio_semantic_evidence(authority)
+    if sha256_file(source) != source_sha256:
+        raise SourceAudioSemanticEvidenceError("Source story index changed during transcription")
+    report_source_audio_progress(
+        progress, "semantics", len(candidates), len(candidates), "publishing"
+    )
     evidence_destination.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(evidence_destination, authority, sort_keys=True)
-    return annotate_story_index_source_audio_semantics(
-        source,
+    return _annotate_validated_story_index_source_audio_semantics(
+        document,
+        authority,
         evidence_destination,
         story_destination,
         chapters=selected_chapters,
@@ -484,6 +500,31 @@ def annotate_story_index_source_audio_semantics(
         )
     document = load_story_index_document(source)
     authority = load_source_audio_semantic_evidence(evidence)
+    return _annotate_validated_story_index_source_audio_semantics(
+        document,
+        authority,
+        evidence,
+        destination,
+        chapters=chapters,
+        cache_hits=cache_hits,
+        asr_calls=asr_calls,
+    )
+
+
+def _annotate_validated_story_index_source_audio_semantics(
+    document,
+    authority,
+    evidence,
+    destination,
+    *,
+    chapters=(),
+    cache_hits=0,
+    asr_calls=0,
+):
+    if destination.exists():
+        raise SourceAudioSemanticEvidenceError(
+            "Semantic annotation must publish a new story-index destination"
+        )
     locale = str(document.metadata.get("language") or "").strip()
     if authority["locale"] != locale:
         raise SourceAudioSemanticEvidenceError("Semantic evidence locale differs from story")
@@ -619,12 +660,30 @@ def create_parser():
     parser.add_argument("--chapter", action="append", default=[])
     parser.add_argument("--decoder", default="vgmstream-cli")
     parser.add_argument("--cache-dir", type=Path)
+    parser.add_argument("--progress-file", type=Path)
     parser.add_argument("--device", default="cpu")
     return parser
 
 
 def main(arguments=None):
     options = create_parser().parse_args(arguments)
+    if options.progress_file is not None and (
+        options.progress_file.expanduser().resolve().is_relative_to(
+            options.model.expanduser().resolve()
+        )
+        or options.progress_file.expanduser().resolve() in {
+            path.expanduser().resolve()
+            for path in (
+                options.story_index,
+                options.bank_index,
+                options.model,
+                options.evidence_output,
+                options.story_output,
+            )
+        }
+    ):
+        print("Progress file must differ from source-audio inputs and outputs", file=sys.stderr)
+        return 1
     try:
         result = publish_source_audio_semantic_evidence(
             options.story_index,
@@ -636,6 +695,11 @@ def main(arguments=None):
             decoder=options.decoder,
             cache_dir=options.cache_dir,
             device=options.device,
+            progress=(
+                SourceAudioProgressFile(options.progress_file)
+                if options.progress_file is not None
+                else None
+            ),
         )
     except (
         OSError,

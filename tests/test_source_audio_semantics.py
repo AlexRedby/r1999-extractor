@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from vntts_artifacts.story_index import write_story_index_document
+from vntts_artifacts.story_index import load_story_index_document, write_story_index_document
 
 from r1999extractor.source_audio_semantics import (
     SourceAudioSemanticEvidenceError,
@@ -54,7 +54,11 @@ class SourceAudioSemanticsTest(unittest.TestCase):
             with patch(
                 "r1999extractor.source_audio_semantics._decode_wem",
                 side_effect=lambda payload, _media_id, _decoder: b"wav:" + payload,
-            ):
+            ), patch(
+                "r1999extractor.source_audio_semantics.load_story_index_document",
+                wraps=load_story_index_document,
+            ) as load:
+                events = []
                 result = publish_source_audio_semantic_evidence(
                     source,
                     root / "unused-bank-index.json",
@@ -64,7 +68,12 @@ class SourceAudioSemanticsTest(unittest.TestCase):
                     chapters=("7",),
                     resolver=Resolver(),
                     transcriber=transcripts.__getitem__,
+                    progress=events.append,
                 )
+                self.assertEqual(load.call_count, 1)
+                self.assertEqual([event["processed"] for event in events], [0, 1, 2, 2])
+                self.assertEqual({event["total"] for event in events}, {2})
+                self.assertEqual(events[-1]["state"], "publishing")
 
             authority = load_source_audio_semantic_evidence(evidence)
 
@@ -104,6 +113,8 @@ class SourceAudioSemanticsTest(unittest.TestCase):
             source_audio_duration_media_id=None,
             source_audio_duration_media_sha256=None,
         )
+        other_chapter = _record(4, "Unselected chapter.", 44, b"other")
+        other_chapter["chapter"] = "8"
 
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -116,13 +127,14 @@ class SourceAudioSemanticsTest(unittest.TestCase):
             write_story_index_document(
                 source,
                 {"game": "Reverse: 1999", "language": "en"},
-                [_record(1, "Stop it.", 11, payload), untimed, absent],
+                [_record(1, "Stop it.", 11, payload), untimed, absent, other_chapter],
             )
 
             with patch(
                 "r1999extractor.source_audio_semantics._decode_wem",
                 return_value=b"wav",
             ):
+                events = []
                 result = publish_source_audio_semantic_evidence(
                     source,
                     root / "unused-bank-index.json",
@@ -132,6 +144,7 @@ class SourceAudioSemanticsTest(unittest.TestCase):
                     chapters=("7",),
                     resolver=Resolver(),
                     transcriber=lambda _payload: "Stop it.",
+                    progress=events.append,
                 )
             authority = load_source_audio_semantic_evidence(evidence)
 
@@ -141,6 +154,59 @@ class SourceAudioSemanticsTest(unittest.TestCase):
         self.assertEqual(outcomes[1]["source_audio_completeness"], "full")
         self.assertEqual(outcomes[2]["source_audio_completeness"], "unknown")
         self.assertEqual(outcomes[3]["source_audio_completeness"], "unknown")
+        self.assertEqual([event["processed"] for event in events], [0, 1, 1])
+        self.assertEqual({event["total"] for event in events}, {1})
+
+    def test_rejects_changed_story_before_publication_and_does_not_finish_aborted_asr(self):
+        payload = b"exact-stop"
+
+        class Resolver:
+            @staticmethod
+            def read_single_available_media(_resolution):
+                return 11, payload
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "timed.jsonl"
+            write_story_index_document(source, {"language": "en"}, [
+                _record(1, "Stop it.", 11, payload),
+                _record(2, "Stop it.", 11, payload),
+            ])
+
+            def publish(name, transcriber, events):
+                with patch("r1999extractor.source_audio_semantics._decode_wem",
+                           return_value=b"wav"):
+                    return publish_source_audio_semantic_evidence(
+                        source, "unused", root / f"{name}-evidence.json",
+                        root / f"{name}-story.jsonl", root / "unused-model",
+                        resolver=Resolver(), transcriber=transcriber,
+                        model_sha256="a" * 64, progress=events.append,
+                    )
+
+            def change_story(_payload):
+                source.write_bytes(source.read_bytes().replace(b"{", b"{ ", 1))
+                return "Stop it."
+
+            events = []
+            with self.assertRaisesRegex(SourceAudioSemanticEvidenceError,
+                                        "Source story index changed"):
+                publish("changed", change_story, events)
+            self.assertFalse((root / "changed-evidence.json").exists())
+            self.assertEqual(events[-1]["state"], "analyzing")
+
+            events = []
+            with self.assertRaisesRegex(SourceAudioSemanticEvidenceError, "no transcript"):
+                publish("aborted", lambda _payload: "", events)
+            self.assertEqual([event["processed"] for event in events], [0])
+            self.assertFalse((root / "aborted-story.jsonl").exists())
+
+            events = []
+            with patch("r1999extractor.source_audio_semantics.write_story_index_document",
+                       side_effect=OSError("publication failed")):
+                with self.assertRaisesRegex(OSError, "publication failed"):
+                    publish("failed", lambda _payload: "Stop it.", events)
+            self.assertEqual(events[-1]["state"], "publishing")
+            self.assertFalse((root / "failed-story.jsonl").exists())
 
     def test_same_media_with_different_displayed_text_is_not_reused(self):
         payload = b"shared-media"
@@ -257,12 +323,14 @@ class SourceAudioSemanticsTest(unittest.TestCase):
             records[1]["chapter"] = "8"
             transcripts = {b"stage-a": "Stop it.", b"stage-b": "Come back."}
             calls = []
+            progress_events = {}
 
             def transcribe(wav):
                 calls.append(wav)
                 return transcripts[wav]
 
             def publish(name, chapters, *, changed_records=None, language="en", device="cpu"):
+                progress_events[name] = []
                 source = root / f"{name}-timed.jsonl"
                 write_story_index_document(
                     source,
@@ -285,6 +353,7 @@ class SourceAudioSemanticsTest(unittest.TestCase):
                         transcriber=transcribe,
                         cache_dir=root / "cache",
                         device=device,
+                        progress=progress_events[name].append,
                     )
 
             first = publish("first", ("7",))
@@ -293,6 +362,10 @@ class SourceAudioSemanticsTest(unittest.TestCase):
             self.assertEqual(second.metadata["source_audio_semantics"]["cache_hits"], 1)
             self.assertEqual(second.metadata["source_audio_semantics"]["asr_calls"], 1)
             self.assertEqual(calls, [b"stage-a", b"stage-b"])
+            self.assertEqual(
+                [event["processed"] for event in progress_events["second"]], [0, 1, 2, 2]
+            )
+            self.assertEqual({event["total"] for event in progress_events["second"]}, {2})
             self.assertEqual(
                 len(load_source_audio_semantic_evidence(root / "second-evidence.json")["entries"]),
                 2,

@@ -34,6 +34,10 @@ from r1999extractor.reverse1999_voice_import import (
     find_game_audio_directory,
 )
 from r1999extractor.settings import get_local_data_directory
+from r1999extractor.source_audio_progress import (
+    SourceAudioProgressCallback,
+    SourceAudioProgressFile,
+)
 from r1999extractor.story_audio import StoryAudioResolver, build_audio_registry
 from r1999extractor.story_index import (
     StoryLine,
@@ -88,6 +92,7 @@ def prepare_player_voice_candidates(
     target_story_index=None,
     narrator=False,
     narrator_line_id=None,
+    progress: SourceAudioProgressCallback | None = None,
 ):
     """Build or reuse safe, selected-role candidates for the player workflow."""
     roles = tuple(
@@ -174,6 +179,7 @@ def prepare_player_voice_candidates(
                 directory,
                 playable_speech_only=use_playable_speech_only,
                 include_unlinked_bank_media=True,
+                **({"progress": progress} if progress is not None else {}),
             )
         return _publish_player_voice_manifest(
             report_path,
@@ -183,6 +189,7 @@ def prepare_player_voice_candidates(
             target_story_index,
             reference_story_sha256,
             target_story_sha256,
+            progress=progress,
         )
     except (OSError, RuntimeError, ValueError) as error:
         raise BootstrapError(f"Unable to prepare character voice candidates: {error}") from error
@@ -196,6 +203,8 @@ def _publish_player_voice_manifest(
     target_story_index,
     reference_story_sha256,
     target_story_sha256,
+    *,
+    progress: SourceAudioProgressCallback | None = None,
 ):
     reference_story_index = Path(reference_story_index).resolve()
     target_story_index = Path(target_story_index).resolve()
@@ -258,6 +267,7 @@ def _publish_player_voice_manifest(
             )
             in published
         },
+        progress=progress,
     )
     voices = []
     variants = []
@@ -371,7 +381,7 @@ def _publish_player_voice_manifest(
     return manifest_path
 
 
-def _prepare_player_portraits(story_index, portraits):
+def _prepare_player_portraits(story_index, portraits, *, progress=None):
     try:
         with Path(story_index).open(encoding="utf-8") as source:
             metadata = json.loads(next(source))
@@ -385,6 +395,7 @@ def _prepare_player_portraits(story_index, portraits):
             portraits,
             Path(story_index).resolve().parent / "portraits",
             cache_key=sha256_file(story_index),
+            **({"progress": progress} if progress is not None else {}),
         )
     except (OSError, StopIteration, json.JSONDecodeError, StoryPortraitError):
         return {}
@@ -546,6 +557,7 @@ def create_parser():
     parser.add_argument("--narrator", action="store_true")
     parser.add_argument("--narrator-line-id")
     parser.add_argument("--voice-candidate-role", action="append", default=[])
+    parser.add_argument("--progress-file", type=Path)
     return parser
 
 
@@ -559,12 +571,25 @@ def main(arguments=None):
         )
         try:
             if options.prepare_voice_candidates_only:
+                if options.progress_file is not None:
+                    progress_path = options.progress_file.expanduser().resolve()
+                    artifact_root = (
+                        Path(options.data_directory or get_local_data_directory())
+                        .expanduser().resolve() / "reverse1999"
+                    )
+                    if progress_path.is_relative_to(artifact_root) or (
+                        options.target_story_index is not None
+                        and progress_path == options.target_story_index.expanduser().resolve()
+                    ):
+                        raise BootstrapError("Progress file must differ from candidate artifacts")
                 manifest = prepare_player_voice_candidates(
                     roles=options.voice_candidate_role,
                     data_directory=options.data_directory,
                     target_story_index=options.target_story_index,
                     narrator=options.narrator,
                     narrator_line_id=options.narrator_line_id,
+                    **({"progress": SourceAudioProgressFile(options.progress_file)}
+                       if options.progress_file is not None else {}),
                 )
                 print(json.dumps({"voice_manifest": str(manifest)}, sort_keys=True))
                 return 0

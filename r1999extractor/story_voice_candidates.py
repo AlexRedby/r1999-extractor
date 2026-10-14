@@ -29,6 +29,10 @@ from r1999extractor.reverse1999_voice_import import (
     GameVoiceImportError,
     decode_reference_data,
 )
+from r1999extractor.source_audio_progress import (
+    SourceAudioProgressCallback,
+    report_source_audio_progress,
+)
 from r1999extractor.story_audio import (
     AudioConfiguration,
     StoryAudioResolutionError,
@@ -366,6 +370,7 @@ def build_story_voice_candidates(
     include_all_bank_media=False,
     include_unlinked_bank_media=False,
     playable_speech_only=False,
+    progress: SourceAudioProgressCallback | None = None,
 ):
     """Publish a non-authoritative audition set without changing a voice manifest."""
     story_index = resolve_story_index_path(story_index)
@@ -517,6 +522,7 @@ def build_story_voice_candidates(
                     grouped[key] = []
 
         candidates = []
+        report_source_audio_progress(progress, "references", 0, len(grouped))
         for (character, portrait, bank, media_id), source_lines in sorted(
             grouped.items(),
             key=lambda value: tuple(str(part or "").casefold() for part in value[0]),
@@ -595,6 +601,7 @@ def build_story_voice_candidates(
                     "affected_portrait_line_count": portrait_affected.get((character, portrait), 0),
                 }
             )
+            report_source_audio_progress(progress, "references", len(candidates), len(grouped))
 
         groups = []
         group_keys = sorted(
@@ -665,6 +672,9 @@ def build_story_voice_candidates(
                 "speaker, contamination and multi-speaker review is complete."
             ),
         }
+        report_source_audio_progress(
+            progress, "references", len(candidates), len(grouped), "publishing"
+        )
         atomic_write_json(staging / "report.json", report)
         if sha256_file(story_index) != story_sha256:
             raise StoryVoiceCandidateError("Story index changed during candidate extraction")

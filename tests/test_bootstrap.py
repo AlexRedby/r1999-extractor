@@ -16,6 +16,10 @@ from r1999extractor.bootstrap import (
     prepare_player_voice_candidates,
 )
 from r1999extractor.reverse1999_index import index_version
+from r1999extractor.source_audio_progress import (
+    SourceAudioProgressFile,
+    report_source_audio_progress,
+)
 from r1999extractor.story_audio import wwise_event_id
 from r1999extractor.story_voice_candidates import (
     REPORT_SCHEMA,
@@ -372,7 +376,7 @@ class BootstrapTest(unittest.TestCase):
         stderr = io.StringIO()
         stdout = io.StringIO()
         with (
-            patch("r1999extractor.bootstrap.bootstrap_local_artifacts", return_value=result),
+            patch("r1999extractor.bootstrap.bootstrap_local_artifacts", return_value=result) as build,
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
@@ -381,6 +385,11 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "Built 7 story lines and source artifacts\n")
         self.assertNotIn("Unable to find", stderr.getvalue())
+        with patch("r1999extractor.bootstrap.bootstrap_local_artifacts", return_value=result) as build:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(main(["--progress-file", "unused-progress.json"]), 0)
+            self.assertTrue(callable(build.call_args.kwargs["progress"]))
+            self.assertNotIsInstance(build.call_args.kwargs["progress"], SourceAudioProgressFile)
 
     def test_cli_forwards_selected_target_story_index(self):
         target = Path("selected-story-index.jsonl")
@@ -402,6 +411,30 @@ class BootstrapTest(unittest.TestCase):
             )
 
         self.assertEqual(prepare.call_args.kwargs["target_story_index"], target)
+        self.assertNotIn("progress", prepare.call_args.kwargs)
+
+    def test_candidate_cli_progress_keeps_final_stdout_and_protects_artifacts(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "external-story.jsonl"
+            arguments = [
+                "--prepare-voice-candidates-only", "--voice-candidate-role", "Hero",
+                "--data-directory", str(root), "--target-story-index", str(target),
+            ]
+            with patch("r1999extractor.bootstrap.prepare_player_voice_candidates",
+                       return_value=Path("manifest.json")) as prepare:
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    self.assertEqual(main(arguments + [
+                        "--progress-file", str(root / "progress.json")
+                    ]), 0)
+                self.assertEqual(json.loads(stdout.getvalue()), {"voice_manifest": "manifest.json"})
+                self.assertIsInstance(prepare.call_args.kwargs["progress"], SourceAudioProgressFile)
+                for protected in (target, root / "reverse1999" / "voice-candidates" / "report.json"):
+                    prepare.reset_mock()
+                    with redirect_stderr(io.StringIO()):
+                        self.assertEqual(main(arguments + ["--progress-file", str(protected)]), 1)
+                    prepare.assert_not_called()
 
     def test_prepares_and_reuses_player_voice_candidate_manifest(self):
         with TemporaryDirectory() as directory:
@@ -435,6 +468,7 @@ class BootstrapTest(unittest.TestCase):
                 *,
                 playable_speech_only=False,
                 include_unlinked_bank_media=False,
+                progress=None,
             ):
                 self.assertTrue(include_unlinked_bank_media)
                 self.assertFalse(playable_speech_only)
@@ -481,6 +515,9 @@ class BootstrapTest(unittest.TestCase):
                 }
                 report_path = destination / "report.json"
                 report_path.write_text(json.dumps(report), encoding="utf-8")
+                report_source_audio_progress(progress, "references", 0, 1)
+                report_source_audio_progress(progress, "references", 1, 1)
+                report_source_audio_progress(progress, "references", 1, 1, "publishing")
                 return report_path, report
 
             with (
@@ -493,7 +530,15 @@ class BootstrapTest(unittest.TestCase):
                     return_value={"hero.png": "a" * 64},
                 ) as portraits,
             ):
-                first = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
+                events = []
+                first = prepare_player_voice_candidates(
+                    roles=("Hero",), data_directory=root, progress=events.append
+                )
+                portraits.assert_called_once_with(
+                    bundles.resolve(), {"hero.png"}, (output / "portraits").resolve(),
+                    cache_key=story_digest, progress=events.append,
+                )
+                self.assertEqual([event["processed"] for event in events], [0, 1, 1])
                 second = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
                 self.assertEqual(builds, [("Hero",)])
                 with patch("r1999extractor.bootstrap.REFERENCE_DECODE_VERSION", 3):

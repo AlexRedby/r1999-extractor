@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
+import zlib
 from pathlib import Path
 
 from vntts_artifacts.atomic_io import atomic_write_bytes, atomic_write_json
 from vntts_artifacts.file_integrity import sha256_file
 
+from r1999extractor.source_audio_progress import report_source_audio_progress
+
 INDEX_SCHEMA = "r1999.story-portrait-sources"
 INDEX_VERSION = 1
 PORTRAIT_BUNDLE_NAMES = (
     hashlib.md5(b"singlebg/headicon_room", usedforsecurity=False).hexdigest() + ".dat",
-    # ponytail: current content-addressed update shards; fallback scan covers new shards.
+    # Legacy bundle hints; manifest routing discovers update shards.
     "ac7537266c12805233251be3166bcf13.dat",
     "f1b6e5893c3d4c416aefa5b88a18b8eb.dat",
 )
@@ -31,6 +35,7 @@ def extract_story_portraits(
     *,
     cache_key=None,
     environment_loader=None,
+    progress=None,
 ):
     """Extract requested exact Sprite names and return filename-to-SHA-256."""
     bundle_directory = Path(bundle_directory).expanduser().resolve()
@@ -45,37 +50,47 @@ def extract_story_portraits(
     sources = _load_sources(index_path, cache_key)
     loader = environment_loader or _load_environment
     payloads = {}
-    attempted = set()
     missing = set(requested)
-
+    manifest_bundles = _manifest_portrait_bundles(bundle_directory, requested)
+    unknown = requested if manifest_bundles is None else requested - manifest_bundles.keys()
+    mapped_bundles = set() if manifest_bundles is None else set().union(*manifest_bundles.values())
     cached_bundles = {sources[filename] for filename in requested if filename in sources}
-    for bundle_name in sorted(cached_bundles):
-        bundle = bundle_directory / bundle_name
-        found = _portraits_from_bundle(bundle, missing, loader)
-        payloads.update(found)
-        missing -= found.keys()
-        attempted.add(bundle)
-
-    for bundle_name in PORTRAIT_BUNDLE_NAMES:
-        preferred = bundle_directory / bundle_name
-        if not missing or not preferred.is_file() or preferred in attempted:
-            continue
-        found = _portraits_from_bundle(preferred, missing, loader)
-        for filename, payload in found.items():
-            payloads[filename] = payload
-            sources[filename] = preferred.name
-        missing -= found.keys()
-        attempted.add(preferred)
-    for bundle in sorted(bundle_directory.glob("*.dat")):
-        if not missing or bundle in attempted:
-            continue
-        found = _portraits_from_bundle(bundle, missing, loader)
-        for filename, payload in found.items():
-            payloads[filename] = payload
-            sources[filename] = bundle.name
-        missing -= found.keys()
+    names = dict.fromkeys(
+        name
+        for name in (*sorted(cached_bundles), *PORTRAIT_BUNDLE_NAMES, *sorted(mapped_bundles))
+        if unknown or name in mapped_bundles
+    )
+    bundles = [bundle_directory / name for name in names if (bundle_directory / name).is_file()]
+    fallback = (
+        [bundle for bundle in sorted(bundle_directory.glob("*.dat")) if bundle.name not in names]
+        if unknown
+        else []
+    )
+    processed = 0
+    total = len(bundles) + len(fallback)
+    report_source_audio_progress(progress, "portraits", processed, total)
+    for candidates, allowed in ((bundles, requested), (fallback, unknown)):
+        for bundle in candidates:
+            targets = missing & allowed
+            if not targets:
+                break
+            targets = {
+                filename
+                for filename in targets
+                if filename in unknown or bundle.name in manifest_bundles[filename]
+            }
+            if not targets:
+                continue
+            found = _portraits_from_bundle(bundle, targets, loader)
+            for filename, payload in found.items():
+                payloads[filename] = payload
+                sources[filename] = bundle.name
+            missing -= found.keys()
+            processed += 1
+            report_source_audio_progress(progress, "portraits", processed, total)
 
     hashes = {}
+    report_source_audio_progress(progress, "portraits", processed, total, "publishing")
     for filename, payload in payloads.items():
         destination = output_directory / filename
         atomic_write_bytes(destination, payload)
@@ -90,6 +105,61 @@ def extract_story_portraits(
         },
     )
     return hashes
+
+
+def _manifest_portrait_bundles(bundle_directory, requested):
+    root = bundle_directory.parent
+    manifests = [root / "configs" / "allmanifest.dat"]
+    if root.name in {"Windows", "PersistentRoot"} and root.parent.name == "StreamingAssets":
+        sibling = "PersistentRoot" if root.name == "Windows" else "Windows"
+        manifests.append(root.parent / sibling / "configs" / "allmanifest.dat")
+    for manifest in manifests:
+        bundles = _portrait_bundles_from_manifest(manifest, requested)
+        if bundles is not None:
+            return bundles
+    return None
+
+
+def _portrait_bundles_from_manifest(manifest, requested):
+    try:
+        with gzip.open(manifest, "rt", encoding="utf-8") as stream:
+            entries = json.load(stream)
+        if not isinstance(entries, list):
+            return None
+        bundles = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return None
+            name = entry.get("abName")
+            assets = entry.get("assets")
+            if (
+                not isinstance(name, str)
+                or not _safe_asset_path(name)
+                or not isinstance(assets, list)
+                or any(
+                    not isinstance(asset, str) or not _safe_asset_path(asset) for asset in assets
+                )
+            ):
+                return None
+            bundle = hashlib.md5(name.encode("utf-8"), usedforsecurity=False).hexdigest() + ".dat"
+            for asset in assets:
+                filename = Path(asset).name
+                if filename in requested:
+                    bundles.setdefault(filename, set()).add(bundle)
+        return bundles
+    except (OSError, UnicodeError, json.JSONDecodeError, EOFError, zlib.error):
+        return None
+
+
+def _safe_asset_path(value):
+    path = Path(value)
+    return (
+        bool(path.parts)
+        and value == value.strip()
+        and "\\" not in value
+        and not path.is_absolute()
+        and ".." not in path.parts
+    )
 
 
 def _portrait_filename(value):

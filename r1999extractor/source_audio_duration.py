@@ -20,6 +20,11 @@ from vntts_artifacts.story_index import (
 )
 
 from r1999extractor.reverse1999_index import bank_index_staleness_reasons
+from r1999extractor.source_audio_progress import (
+    SourceAudioProgressCallback,
+    SourceAudioProgressFile,
+    report_source_audio_progress,
+)
 from r1999extractor.story_audio import (
     AudioResolution,
     StoryAudioResolutionError,
@@ -215,6 +220,7 @@ def annotate_story_index_source_audio_durations(
     decoder="vgmstream-cli",
     probe=None,
     cache_dir=None,
+    progress: SourceAudioProgressCallback | None = None,
 ):
     """Publish a new story index with verified timing on selected source voices."""
     source = Path(story_index).expanduser().resolve()
@@ -225,6 +231,12 @@ def annotate_story_index_source_audio_durations(
         )
     document = load_story_index_document(source)
     selected_chapters = {str(chapter).strip() for chapter in chapters if str(chapter).strip()}
+    total = sum(
+        line.source_audio_status == "available"
+        and (not selected_chapters or line.chapter in selected_chapters)
+        for line in document.records
+    )
+    report_source_audio_progress(progress, "duration", 0, total)
     if probe is None:
         bank_index_path = Path(bank_index).expanduser().resolve()
         try:
@@ -274,6 +286,7 @@ def annotate_story_index_source_audio_durations(
                 source_audio_completeness_reason=completeness_reason,
             )
         records.append(record)
+        report_source_audio_progress(progress, "duration", eligible, total)
 
     metadata = dict(document.metadata)
     metadata["source_audio_completion"] = "verified-media-duration-seconds"
@@ -287,6 +300,7 @@ def annotate_story_index_source_audio_durations(
         "cache_hits": getattr(probe, "cache_hits", 0),
         "decoder_probes": getattr(probe, "decoder_probes", 0),
     }
+    report_source_audio_progress(progress, "duration", eligible, total, "publishing")
     return write_story_index_document(destination, metadata, records)
 
 
@@ -328,11 +342,18 @@ def create_parser():
     parser.add_argument("--chapter", action="append", default=[])
     parser.add_argument("--decoder", default="vgmstream-cli")
     parser.add_argument("--cache-dir", type=Path)
+    parser.add_argument("--progress-file", type=Path)
     return parser
 
 
 def main(arguments=None):
     options = create_parser().parse_args(arguments)
+    if options.progress_file is not None and options.progress_file.expanduser().resolve() in {
+        path.expanduser().resolve()
+        for path in (options.story_index, options.bank_index, options.output)
+    }:
+        print("Progress file must differ from source-audio inputs and outputs", file=sys.stderr)
+        return 1
     try:
         result = annotate_story_index_source_audio_durations(
             options.story_index,
@@ -341,6 +362,11 @@ def main(arguments=None):
             chapters=options.chapter,
             decoder=options.decoder,
             cache_dir=options.cache_dir,
+            progress=(
+                SourceAudioProgressFile(options.progress_file)
+                if options.progress_file is not None
+                else None
+            ),
         )
     except (OSError, StoryAudioResolutionError, StoryIndexError) as error:
         print(error, file=sys.stderr)
