@@ -8,8 +8,11 @@ import json
 import shutil
 import sys
 import tempfile
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 
 from vntts_artifacts.atomic_io import atomic_write_json
@@ -98,6 +101,10 @@ def _required_text(value, label):
 
 def collect_story_voice_lines(story_index, roles):
     """Collect exact installed source lines for requested role names."""
+    return _collect_story_voice_inventory(story_index, roles)[:2]
+
+
+def _collect_story_voice_inventory(story_index, roles):
     story_index = Path(story_index).expanduser().resolve()
     requested = {}
     for role in roles:
@@ -119,6 +126,9 @@ def collect_story_voice_lines(story_index, roles):
     lines = []
     seen = set()
     observed_roles = set()
+    character_counts = {role: 0 for role in requested.values()}
+    portrait_counts = {}
+    bank_identities = {}
     try:
         decoded = payload.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -134,7 +144,21 @@ def collect_story_voice_lines(story_index, roles):
             continue
         character = str(record.get("voice_character") or "").strip()
         key = normalize_character_name(character)
-        if key not in requested or record.get("source_audio_status") != "available":
+        portrait = (
+            str(record["portrait"]).strip()
+            if isinstance(record.get("portrait"), str) and str(record["portrait"]).strip()
+            else None
+        )
+        available = record.get("source_audio_status") == "available"
+        bank = str(record.get("source_bank") or "").strip()
+        if available and bank and character:
+            bank_identities.setdefault(bank, set()).add((key, portrait))
+        role = requested.get(key)
+        if role is not None and record.get("speakable") is not False and not available:
+            character_counts[role] += 1
+            identity = (role, portrait)
+            portrait_counts[identity] = portrait_counts.get(identity, 0) + 1
+        if role is None or not available:
             continue
         observed_roles.add(key)
         text = _required_text(record.get("text"), f"Story line {number} text")
@@ -155,11 +179,7 @@ def collect_story_voice_lines(story_index, roles):
             line_id=_required_text(record.get("line_id"), f"Story line {number} ID"),
             character=requested[key],
             speaker=_required_text(record.get("speaker"), f"Story line {number} speaker"),
-            portrait=(
-                str(record["portrait"]).strip()
-                if isinstance(record.get("portrait"), str) and str(record["portrait"]).strip()
-                else None
-            ),
+            portrait=portrait,
             text=text,
             text_sha256=text_sha256,
             source_audio_id=_required_text(
@@ -203,7 +223,13 @@ def collect_story_voice_lines(story_index, roles):
         raise StoryVoiceCandidateError(
             "No installed same-speaker story audio found for: " + ", ".join(missing)
         )
-    return tuple(lines), hashlib.sha256(payload).hexdigest()
+    return (
+        tuple(lines),
+        hashlib.sha256(payload).hexdigest(),
+        character_counts,
+        portrait_counts,
+        bank_identities,
+    )
 
 
 def is_playable_main_voice_reference(line_id, source_bank):
@@ -275,40 +301,6 @@ def affected_story_line_counts(story_index, roles):
     return character_counts, portrait_counts
 
 
-def _available_voice_identities_by_bank(story_index):
-    identities = {}
-    try:
-        lines = Path(story_index).read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError) as error:
-        raise StoryVoiceCandidateError(
-            f"Unable to inspect story bank ownership from {story_index}: {error}"
-        ) from error
-    for number, raw in enumerate(lines, start=1):
-        try:
-            record = json.loads(raw)
-        except json.JSONDecodeError as error:
-            raise StoryVoiceCandidateError(
-                f"Story index line {number} is invalid JSON: {error}"
-            ) from error
-        if (
-            not isinstance(record, dict)
-            or record.get("record_type") != "line"
-            or record.get("source_audio_status") != "available"
-        ):
-            continue
-        bank = str(record.get("source_bank") or "").strip()
-        character = str(record.get("voice_character") or "").strip()
-        if not bank or not character:
-            continue
-        portrait = (
-            str(record["portrait"]).strip()
-            if isinstance(record.get("portrait"), str) and str(record["portrait"]).strip()
-            else None
-        )
-        identities.setdefault(bank, set()).add((normalize_character_name(character), portrait))
-    return identities
-
-
 def _bank_entries(bank_index):
     return {entry["filename"].casefold(): entry for entry in bank_index["banks"]}
 
@@ -375,7 +367,9 @@ def build_story_voice_candidates(
     """Publish a non-authoritative audition set without changing a voice manifest."""
     story_index = resolve_story_index_path(story_index)
     bank_index_path = Path(bank_index_path).expanduser().resolve()
-    lines, story_sha256 = collect_story_voice_lines(story_index, roles)
+    lines, story_sha256, character_affected, portrait_affected, bank_identities = (
+        _collect_story_voice_inventory(story_index, roles)
+    )
     if playable_speech_only:
         lines = tuple(
             line
@@ -385,7 +379,6 @@ def build_story_voice_candidates(
         )
         if not lines:
             raise StoryVoiceCandidateError("No playable speech references are available")
-    character_affected, portrait_affected = affected_story_line_counts(story_index, roles)
     try:
         bank_index_payload = bank_index_path.read_bytes()
         bank_index = validate_bank_index_document(json.loads(bank_index_payload.decode("utf-8")))
@@ -449,7 +442,7 @@ def build_story_voice_candidates(
 
         if include_all_bank_media or include_unlinked_bank_media:
             complete_identities = (
-                _available_voice_identities_by_bank(story_index)
+                bank_identities
                 if include_unlinked_bank_media and not include_all_bank_media
                 else None
             )
@@ -523,19 +516,9 @@ def build_story_voice_candidates(
 
         candidates = []
         report_source_audio_progress(progress, "references", 0, len(grouped))
-        for (character, portrait, bank, media_id), source_lines in sorted(
-            grouped.items(),
-            key=lambda value: tuple(str(part or "").casefold() for part in value[0]),
-        ):
-            source_modes = {
-                media_id in resolutions[line.line_id].streamed_media_ids
-                or media_id not in snapshots[bank].media
-                for line in source_lines
-            }
-            if len(source_modes) > 1:
-                raise StoryVoiceCandidateError(
-                    f"Conflicting embedded/streamed routes for {bank} media {media_id}"
-                )
+
+        def reference_path(identity):
+            character, portrait, bank, media_id = identity
             group_slug = "-".join(
                 (
                     slugify(character, fallback="character"),
@@ -545,7 +528,19 @@ def build_story_voice_candidates(
                     f"decoded-v{REFERENCE_DECODE_VERSION}",
                 )
             )
-            relative = Path("references") / group_slug / f"{group_slug}.wav"
+            return Path("references") / group_slug / f"{group_slug}.wav"
+
+        def prepare_reference(item):
+            (character, portrait, bank, media_id), source_lines, relative = item
+            source_modes = {
+                media_id in resolutions[line.line_id].streamed_media_ids
+                or media_id not in snapshots[bank].media
+                for line in source_lines
+            }
+            if len(source_modes) > 1:
+                raise StoryVoiceCandidateError(
+                    f"Conflicting embedded/streamed routes for {bank} media {media_id}"
+                )
             snapshot = snapshots[bank]
             event_ids = sorted(
                 event_id for event_id, media_ids in snapshot.routes.items() if media_id in media_ids
@@ -579,29 +574,50 @@ def build_story_voice_candidates(
             metrics_document["path"] = relative.as_posix()
             text_hashes = sorted({line.text_sha256 for line in source_lines})
             candidate_origin = STORY_LINE_ROUTE if source_lines else EXACT_BANK_UNROUTED_MEDIA
-            candidates.append(
-                {
-                    "character": character,
-                    "portrait": portrait,
-                    "source_bank": bank,
-                    "source_bank_sha256": snapshot.sha256,
-                    "media_id": media_id,
-                    "source_sha256": imported.source_sha256,
-                    "reference_decode_version": REFERENCE_DECODE_VERSION,
-                    "candidate_origin": candidate_origin,
-                    "source_event_ids": event_ids,
-                    "reference": relative.as_posix(),
-                    "reference_sha256": imported.reference_sha256,
-                    "source_lines": [asdict(line) for line in source_lines],
-                    "transcript_conflict": len(text_hashes) > 1,
-                    "metrics": metrics_document,
-                    "technical_pass": not metrics.technical_flags,
-                    "manual_content_review_required": True,
-                    "affected_character_line_count": character_affected[character],
-                    "affected_portrait_line_count": portrait_affected.get((character, portrait), 0),
-                }
+            return {
+                "character": character,
+                "portrait": portrait,
+                "source_bank": bank,
+                "source_bank_sha256": snapshot.sha256,
+                "media_id": media_id,
+                "source_sha256": imported.source_sha256,
+                "reference_decode_version": REFERENCE_DECODE_VERSION,
+                "candidate_origin": candidate_origin,
+                "source_event_ids": event_ids,
+                "reference": relative.as_posix(),
+                "reference_sha256": imported.reference_sha256,
+                "source_lines": [asdict(line) for line in source_lines],
+                "transcript_conflict": len(text_hashes) > 1,
+                "metrics": metrics_document,
+                "technical_pass": not metrics.technical_flags,
+                "manual_content_review_required": True,
+                "affected_character_line_count": character_affected[character],
+                "affected_portrait_line_count": portrait_affected.get((character, portrait), 0),
+            }
+
+        items = [
+            (identity, source_lines, reference_path(identity))
+            for identity, source_lines in sorted(
+                grouped.items(),
+                key=lambda value: tuple(str(part or "").casefold() for part in value[0]),
             )
-            report_source_audio_progress(progress, "references", len(candidates), len(grouped))
+        ]
+        independent_paths = len({item[2].as_posix().casefold() for item in items}) == len(items)
+        if (
+            media_decoder is decode_reference_data
+            and analyzer is analyze_voice_reference
+            and independent_paths
+        ):
+            prepared = _prepare_references_concurrently(prepare_reference, items)
+        else:
+            prepared = map(prepare_reference, items)
+        try:
+            for candidate in prepared:
+                candidates.append(candidate)
+                report_source_audio_progress(progress, "references", len(candidates), len(grouped))
+        finally:
+            if hasattr(prepared, "close"):
+                prepared.close()
 
         groups = []
         group_keys = sorted(
@@ -701,6 +717,20 @@ def build_story_voice_candidates(
         if staging.exists():
             shutil.rmtree(staging)
         raise
+
+
+def _prepare_references_concurrently(prepare, items):
+    items = iter(items)
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        pending = deque(workers.submit(prepare, item) for item in islice(items, 4))
+        try:
+            while pending:
+                yield pending.popleft().result()
+                if (item := next(items, None)) is not None:
+                    pending.append(workers.submit(prepare, item))
+        finally:
+            for future in pending:
+                future.cancel()
 
 
 def create_parser():

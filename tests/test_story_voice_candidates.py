@@ -3,6 +3,8 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Barrier, Event, get_ident
+from unittest.mock import patch
 
 from r1999extractor.reverse1999_index import index_version
 from r1999extractor.reverse1999_voice_import import ImportedReference
@@ -10,6 +12,8 @@ from r1999extractor.story_audio import wwise_event_id
 from r1999extractor.story_voice_candidates import (
     BankSnapshot,
     StoryVoiceCandidateError,
+    _collect_story_voice_inventory,
+    _prepare_references_concurrently,
     affected_story_line_counts,
     build_story_voice_candidates,
     collect_story_voice_lines,
@@ -107,6 +111,187 @@ def clean_metrics(path):
 
 
 class StoryVoiceCandidateTest(unittest.TestCase):
+    def test_inventory_captures_coverage_and_other_bank_owners_in_one_json_pass(self):
+        with TemporaryDirectory() as directory:
+            story = write_story(
+                Path(directory) / "story.jsonl",
+                [
+                    story_line(1, "Hero line."),
+                    {**story_line(2, "Missing line."), "source_audio_status": "absent"},
+                    {
+                        **story_line(3, "Not speakable."),
+                        "source_audio_status": "absent",
+                        "speakable": False,
+                    },
+                    {**story_line(4, "Other owner."), "voice_character": "Other"},
+                ],
+            )
+            expected_rows = story.read_text().splitlines()
+            with patch(
+                "r1999extractor.story_voice_candidates.json.loads", wraps=json.loads
+            ) as loads:
+                lines, digest, characters, portraits, owners = _collect_story_voice_inventory(
+                    story, iter(["Hero"])
+                )
+            self.assertEqual([call.args[0] for call in loads.call_args_list], expected_rows)
+            self.assertEqual(digest, hashlib.sha256(story.read_bytes()).hexdigest())
+            self.assertEqual([line.line_id for line in lines], ["reverse1999:story:1"])
+            self.assertEqual((characters, portraits), affected_story_line_counts(story, ["Hero"]))
+            self.assertEqual(characters, {"Hero": 1})
+            self.assertEqual(
+                owners, {"hero_story.bnk": {("hero", "hero.png"), ("other", "hero.png")}}
+            )
+
+    def test_concurrent_preparation_is_bounded_and_returns_sorted_order(self):
+        started = [Event() for _ in range(4)]
+        consumed = []
+
+        def items():
+            for number in range(12):
+                consumed.append(number)
+                yield number
+
+        def prepare(number):
+            if number < 4:
+                started[number].set()
+            if number == 0:
+                self.assertTrue(started[3].wait(3))
+            return number
+
+        prepared = _prepare_references_concurrently(prepare, items())
+        self.assertEqual(next(prepared), 0)
+        self.assertEqual(consumed, [0, 1, 2, 3])
+        self.assertEqual(list(prepared), list(range(1, 12)))
+
+    def test_concurrent_failure_waits_for_workers_before_cleanup(self):
+        started = Barrier(4)
+        failed = Event()
+        finished = []
+
+        def prepare(number):
+            started.wait(timeout=3)
+            if number == 0:
+                failed.set()
+                raise RuntimeError("decoder failed")
+            self.assertTrue(failed.wait(3))
+            finished.append(number)
+            return number
+
+        with self.assertRaisesRegex(RuntimeError, "decoder failed"):
+            list(_prepare_references_concurrently(prepare, range(12)))
+        self.assertCountEqual(finished, [1, 2, 3])
+
+    def test_concurrent_generator_close_waits_for_running_workers(self):
+        started = Barrier(4)
+        release = Event()
+        finished = []
+
+        def prepare(number):
+            started.wait(timeout=3)
+            if number:
+                self.assertTrue(release.wait(3))
+                finished.append(number)
+            return number
+
+        prepared = _prepare_references_concurrently(prepare, range(12))
+        self.assertEqual(next(prepared), 0)
+        release.set()
+        prepared.close()
+        self.assertCountEqual(finished, [1, 2, 3])
+
+    def test_default_workers_are_eligible_but_custom_callbacks_keep_main_thread_and_guards(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = write_story(root / "story.jsonl", [story_line(1, "Hero.")])
+            audio = root / "audio"
+            audio.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio)
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"voice"},
+                routes={wwise_event_id("play_hero_line"): (10,)},
+            )
+            kwargs = {"decoder": "true", "bank_loader": lambda _index, _bank: snapshot}
+            caller = get_ident()
+
+            def decode(data, output, media_id, _decoder, *, bank=None):
+                self.assertEqual(get_ident(), caller)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(data)
+                return ImportedReference(
+                    output,
+                    media_id,
+                    hashlib.sha256(data).hexdigest(),
+                    hashlib.sha256(data).hexdigest(),
+                    bank,
+                )
+
+            with patch(
+                "r1999extractor.story_voice_candidates._prepare_references_concurrently",
+                side_effect=RuntimeError("worker marker"),
+            ) as workers:
+                with self.assertRaisesRegex(RuntimeError, "worker marker"):
+                    build_story_voice_candidates(
+                        story, bank_index, ["Hero"], root / "default", **kwargs
+                    )
+                self.assertEqual(workers.call_count, 1)
+                self.assertFalse((root / "default").exists())
+                build_story_voice_candidates(
+                    story,
+                    bank_index,
+                    ["Hero"],
+                    root / "custom",
+                    media_decoder=decode,
+                    analyzer=clean_metrics,
+                    **kwargs,
+                )
+                self.assertEqual(workers.call_count, 1)
+
+                write_story(
+                    story,
+                    [story_line(1, "Hero."), story_line(2, "Hero smile.", portrait="hero.jpg")],
+                )
+                with (
+                    patch("r1999extractor.story_voice_candidates.decode_reference_data", decode),
+                    patch(
+                        "r1999extractor.story_voice_candidates.analyze_voice_reference",
+                        clean_metrics,
+                    ),
+                ):
+                    _path, report = build_story_voice_candidates(
+                        story,
+                        bank_index,
+                        ["Hero"],
+                        root / "collision",
+                        media_decoder=decode,
+                        analyzer=clean_metrics,
+                        **kwargs,
+                    )
+                self.assertEqual(workers.call_count, 1)
+                self.assertEqual(len(report["candidates"]), 2)
+                self.assertEqual(
+                    report["candidates"][0]["reference"], report["candidates"][1]["reference"]
+                )
+
+                def mutate_story(*args, **kw):
+                    result = decode(*args, **kw)
+                    story.write_text("changed")
+                    return result
+
+                with self.assertRaisesRegex(StoryVoiceCandidateError, "Story index changed"):
+                    build_story_voice_candidates(
+                        story,
+                        bank_index,
+                        ["Hero"],
+                        root / "changed",
+                        media_decoder=mutate_story,
+                        analyzer=clean_metrics,
+                        **kwargs,
+                    )
+            self.assertFalse((root / "changed").exists())
+            self.assertFalse(list(root.glob(".*.staging-*")))
+
     def test_manual_picker_accepts_only_playable_main_voice_with_too_long_flag(self):
         candidate = {
             "source_bank": "hero3146_mainvoc.bnk",
@@ -345,10 +530,16 @@ class StoryVoiceCandidateTest(unittest.TestCase):
                 progress=events.append,
             )
             self.assertEqual(
-                [(event["stage"], event["processed"], event["total"], event["state"])
-                 for event in events],
-                [("references", 0, 2, "analyzing"), ("references", 1, 2, "analyzing"),
-                 ("references", 2, 2, "analyzing"), ("references", 2, 2, "publishing")],
+                [
+                    (event["stage"], event["processed"], event["total"], event["state"])
+                    for event in events
+                ],
+                [
+                    ("references", 0, 2, "analyzing"),
+                    ("references", 1, 2, "analyzing"),
+                    ("references", 2, 2, "analyzing"),
+                    ("references", 2, 2, "publishing"),
+                ],
             )
 
             def fail_analysis(_path):
@@ -357,9 +548,15 @@ class StoryVoiceCandidateTest(unittest.TestCase):
             failed_events = []
             with self.assertRaisesRegex(RuntimeError, "analysis failed"):
                 build_story_voice_candidates(
-                    story, bank_index, ["Hero"], root / "failed", decoder="true",
-                    bank_loader=lambda _index, _filename: snapshot, media_decoder=decode,
-                    analyzer=fail_analysis, progress=failed_events.append,
+                    story,
+                    bank_index,
+                    ["Hero"],
+                    root / "failed",
+                    decoder="true",
+                    bank_loader=lambda _index, _filename: snapshot,
+                    media_decoder=decode,
+                    analyzer=fail_analysis,
+                    progress=failed_events.append,
                 )
             self.assertEqual([event["processed"] for event in failed_events], [0])
             self.assertFalse((root / "failed").exists())
