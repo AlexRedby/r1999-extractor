@@ -15,6 +15,7 @@ from r1999extractor.source_audio_semantics import (
     SourceAudioSemanticEvidenceError,
     WhisperTranscriber,
     _canonical_sha256,
+    annotate_story_index_source_audio_semantics,
     load_source_audio_semantic_evidence,
     normalize_semantic_text,
     publish_source_audio_semantic_evidence,
@@ -87,6 +88,64 @@ def _wav_bytes(pcm, rate, channels=1, sample_width=2):
 class SourceAudioSemanticsTest(unittest.TestCase):
     def test_normalizes_spoken_identity_without_trusting_punctuation(self):
         self.assertEqual(normalize_semantic_text(" R-Right… don’t! "), "r right don't")
+
+    def test_punctuation_variants_keep_exact_evidence_and_reuse_asr(self):
+        payload = b"exact-stop"
+        records = [
+            _record(1, "Stop it.", 11, payload),
+            _record(2, "Stop it!", 11, payload),
+            _record(3, "Stop it.", 11, payload),
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "timed.jsonl"
+            evidence = root / "evidence.json"
+            write_story_index_document(source, {"language": "en"}, records)
+            resolver = Mock()
+            resolver.read_single_available_media.return_value = (11, payload)
+            transcriber = Mock(return_value="Stop it!")
+            with patch(
+                "r1999extractor.source_audio_semantics._decode_wem", return_value=b"wav"
+            ) as decode:
+                result = publish_source_audio_semantic_evidence(
+                    source,
+                    "unused-bank",
+                    evidence,
+                    root / "semantic.jsonl",
+                    "unused-model",
+                    model_sha256="a" * 64,
+                    resolver=resolver,
+                    transcriber=transcriber,
+                )
+            decode.assert_called_once()
+            transcriber.assert_called_once_with(b"wav")
+            self.assertEqual(result.metadata["source_audio_semantics"]["asr_calls"], 1)
+            entries = load_source_audio_semantic_evidence(evidence)["entries"]
+            self.assertEqual(len(entries), 2)
+            self.assertEqual(
+                [entry["displayed_text_sha256"] for entry in entries],
+                sorted({record["text_sha256"] for record in records}),
+            )
+            for line, record in zip(result.records, records):
+                entry = next(
+                    entry
+                    for entry in entries
+                    if entry["displayed_text_sha256"] == record["text_sha256"]
+                )
+                self.assertIn(line.line_id, entry["source_line_ids"])
+                self.assertEqual(line.to_record()["source_audio_completeness"], "full")
+                self.assertEqual(
+                    line.to_record()["source_audio_semantic_evidence_entry_id"], entry["entry_id"]
+                )
+
+            changed_source = root / "changed.jsonl"
+            write_story_index_document(
+                changed_source, {"language": "en"}, [_record(1, "Stop it?", 11, payload)]
+            )
+            with self.assertRaisesRegex(SourceAudioSemanticEvidenceError, "does not cover"):
+                annotate_story_index_source_audio_semantics(
+                    changed_source, evidence, root / "changed-semantic.jsonl"
+                )
 
     def test_reuses_verified_media_for_different_text_but_keeps_separate_verdicts(self):
         payload = b"exact-stop"

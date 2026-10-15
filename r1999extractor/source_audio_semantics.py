@@ -296,7 +296,7 @@ def publish_source_audio_semantic_evidence(
         reason = (
             "exact-normalized-asr-transcript" if verdict == "full" else "asr-transcript-mismatch"
         )
-        key = (document.metadata.get("language"), identity[2], identity[4])
+        key = (document.metadata.get("language"), identity[2], identity[4], identity[3])
         entry = entries.get(key)
         if entry is None:
             entry = {
@@ -358,6 +358,7 @@ def publish_source_audio_semantic_evidence(
             value["locale"],
             value["media_sha256"],
             value["normalized_displayed_text_sha256"],
+            value["displayed_text_sha256"],
         ),
     ):
         entry["source_line_ids"] = sorted(set(entry["source_line_ids"]))
@@ -434,7 +435,9 @@ def validate_source_audio_semantic_evidence(document):
             entry.get("normalized_displayed_text_sha256"),
             "semantic normalized displayed text",
         )
-        _require_sha256(entry.get("displayed_text_sha256"), "semantic displayed text")
+        displayed_text_sha256 = _require_sha256(
+            entry.get("displayed_text_sha256"), "semantic displayed text"
+        )
         if entry.get("model_sha256") != model_sha256:
             raise SourceAudioSemanticEvidenceError("Semantic entry model binding changed")
         observed = entry.get("observed_transcript")
@@ -468,7 +471,7 @@ def validate_source_audio_semantic_evidence(document):
         )
         if entry_id != expected_entry_id:
             raise SourceAudioSemanticEvidenceError("Semantic evidence entry ID changed")
-        keys.append((locale, media_sha256, normalized_text_sha256))
+        keys.append((locale, media_sha256, normalized_text_sha256, displayed_text_sha256))
     if keys != sorted(set(keys)):
         raise SourceAudioSemanticEvidenceError(
             "Semantic evidence entries are duplicated or not canonical"
@@ -543,6 +546,7 @@ def _annotate_validated_story_index_source_audio_semantics(
             entry["locale"],
             entry["media_sha256"],
             entry["normalized_displayed_text_sha256"],
+            entry["displayed_text_sha256"],
         ): entry
         for entry in authority["entries"]
     }
@@ -555,7 +559,7 @@ def _annotate_validated_story_index_source_audio_semantics(
         selected = not selected_chapters or line.chapter in selected_chapters
         if selected and _is_unknown_timed_source_cue(record):
             identity = _record_identity(record)
-            key = (locale, identity[2], identity[4])
+            key = (locale, identity[2], identity[4], identity[3])
             entry = index.get(key)
             if entry is None:
                 unresolved.append(record["line_id"])
