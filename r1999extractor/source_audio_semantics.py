@@ -96,13 +96,15 @@ class WhisperTranscriber:
 
     def __init__(self, model_directory, *, device="cpu"):
         try:
-            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+            from transformers import AutoProcessor, pipeline
+
+            from r1999extractor.whisper_beam_cache import CpuWhisperForConditionalGeneration
 
             processor = AutoProcessor.from_pretrained(
                 model_directory,
                 local_files_only=True,
             )
-            model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model = CpuWhisperForConditionalGeneration.from_pretrained(
                 model_directory,
                 local_files_only=True,
             )
