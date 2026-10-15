@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 from r1999extractor.voice_reference_quality import (
+    UnusableVoiceReferenceError,
     VoiceReferenceQualityError,
     analyze_voice_reference,
     select_reference_set,
@@ -60,8 +61,28 @@ class VoiceReferenceQualityTest(unittest.TestCase):
             path = Path(temporary_directory) / "empty.wav"
             write_wav(path, np.array([], dtype=np.float32))
 
-            with self.assertRaisesRegex(VoiceReferenceQualityError, "no audio"):
+            with self.assertRaisesRegex(UnusableVoiceReferenceError, "no audio"):
                 analyze_voice_reference(path)
+
+    def test_classifies_only_valid_audio_without_speech_as_unusable(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            output = root / "normalized.wav"
+            for samples in (np.array([], dtype=np.float32), np.zeros(16000)):
+                with self.subTest(sample_count=len(samples)):
+                    write_wav(source, samples)
+                    with self.assertRaises(UnusableVoiceReferenceError):
+                        trim_and_normalize_voice_reference(source, output)
+                    self.assertFalse(output.exists())
+            source.write_bytes(b"invalid WAV")
+            with self.assertRaises(VoiceReferenceQualityError) as raised:
+                trim_and_normalize_voice_reference(source, output)
+            self.assertNotIsInstance(raised.exception, UnusableVoiceReferenceError)
+            source.unlink()
+            with self.assertRaises(VoiceReferenceQualityError) as raised:
+                trim_and_normalize_voice_reference(source, output)
+            self.assertNotIsInstance(raised.exception, UnusableVoiceReferenceError)
 
     def test_trims_silence_and_normalizes_peak_atomically(self):
         with TemporaryDirectory() as temporary_directory:

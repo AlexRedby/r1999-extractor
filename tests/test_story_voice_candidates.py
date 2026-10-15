@@ -19,7 +19,12 @@ from r1999extractor.story_voice_candidates import (
     collect_story_voice_lines,
     is_manual_playable_too_long_candidate,
 )
-from r1999extractor.voice_reference_quality import VoiceReferenceMetrics
+from r1999extractor.voice_reference_quality import (
+    UnusableVoiceReferenceError,
+    VoiceReferenceMetrics,
+    VoiceReferenceQualityError,
+)
+from r1999extractor.wwise import AudioConversionError
 
 
 def story_line(number, text, *, portrait="hero.png", media_id=10):
@@ -107,6 +112,60 @@ def clean_metrics(path):
         clipping_ratio=0.0,
         quality_score=100,
         technical_flags=(),
+    )
+
+
+def candidate_fixture(root, lines, media_by_bank):
+    story = write_story(root / "story.jsonl", lines)
+    audio_root = root / "audio"
+    audio_root.mkdir()
+    index_path, _bank = write_bank_index(root / "banks.json", audio_root)
+    index = json.loads(index_path.read_text())
+    entry = index["banks"][0]
+    index["banks"] = []
+    snapshots = {}
+    for bank_name, media in media_by_bank.items():
+        bank = audio_root / bank_name
+        bank.write_bytes(b"bank " + bank_name.encode())
+        routes = {
+            wwise_event_id(line["source_event"]): tuple(line["source_media_ids"])
+            for line in lines
+            if line["source_bank"] == bank_name
+        }
+        for media_id in media:
+            if not any(media_id in values for values in routes.values()):
+                routes[media_id] = (media_id,)
+        index["banks"].append(
+            {
+                **entry,
+                "filename": bank_name,
+                "path": bank_name,
+                "size": bank.stat().st_size,
+                "mtime_ns": bank.stat().st_mtime_ns,
+                "embedded_media_ids": list(media),
+                "events": [
+                    {"event_id": event_id, "media_ids": list(values), "streamed_media_ids": []}
+                    for event_id, values in routes.items()
+                ],
+            }
+        )
+        snapshots[bank_name] = BankSnapshot(
+            bank, hashlib.sha256(bank.read_bytes()).hexdigest(), media, routes
+        )
+    index["bank_count"] = len(index["banks"])
+    index_path.write_text(json.dumps(index))
+    return story, index_path, snapshots
+
+
+def decode_candidate(data, output, media_id, _decoder, *, bank=None):
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(data)
+    return ImportedReference(
+        output,
+        media_id,
+        hashlib.sha256(data).hexdigest(),
+        hashlib.sha256(data).hexdigest(),
+        bank,
     )
 
 
@@ -428,6 +487,310 @@ class StoryVoiceCandidateTest(unittest.TestCase):
                     )
             self.assertFalse((root / "changed").exists())
             self.assertFalse(list(root.glob(".*.staging-*")))
+
+    def test_batch_rejections_preserve_evidence_order_progress_and_good_references(self):
+        for failure_stage in ("decode", "analyze"):
+            with self.subTest(failure_stage=failure_stage), TemporaryDirectory() as directory:
+                root = Path(directory)
+                media = {number: str(number).encode() for number in range(10, 20)}
+                lines = [
+                    {
+                        **story_line(number, "Shared text.", media_id=number),
+                        "source_event": f"play_line_{number}",
+                    }
+                    for number in media
+                ]
+                story, index, snapshots = candidate_fixture(root, lines, {"hero_story.bnk": media})
+                rejected = {10, 13, 19}
+                progress = []
+                single_calls = []
+
+                def decode(data, output, media_id, decoder, *, bank=None):
+                    self.assertFalse(output.exists(), "Partial batch output survived retry")
+                    single_calls.append(media_id)
+                    result = decode_candidate(data, output, media_id, decoder, bank=bank)
+                    if failure_stage == "decode" and media_id in rejected:
+                        raise UnusableVoiceReferenceError("WAV contains no audio")
+                    return result
+
+                def analyze(path):
+                    if failure_stage == "analyze" and int(path.read_bytes()) in rejected:
+                        raise UnusableVoiceReferenceError("WAV contains no speech-level audio")
+                    return clean_metrics(path)
+
+                def decode_batch(references, decoder):
+                    return [
+                        decode(data, output, media_id, decoder, bank=bank)
+                        for data, output, media_id, bank in references
+                    ]
+
+                def reverse_batches(prepare, batches):
+                    return iter([prepare(batch) for batch in reversed(list(batches))])
+
+                with (
+                    patch("r1999extractor.story_voice_candidates.decode_reference_data", decode),
+                    patch("r1999extractor.story_voice_candidates.analyze_voice_reference", analyze),
+                    patch(
+                        "r1999extractor.story_voice_candidates.decode_reference_batch",
+                        side_effect=decode_batch,
+                    ) as batch_decoder,
+                    patch(
+                        "r1999extractor.story_voice_candidates._prepare_references_concurrently",
+                        side_effect=reverse_batches,
+                    ),
+                ):
+                    report_path, report = build_story_voice_candidates(
+                        story,
+                        index,
+                        ["Hero"],
+                        root / "candidates",
+                        decoder="true",
+                        bank_loader=lambda _index, bank: snapshots[bank],
+                        media_decoder=decode,
+                        analyzer=analyze,
+                        progress=progress.append,
+                    )
+                self.assertEqual(batch_decoder.call_count, 2)
+                self.assertEqual(
+                    [row["media_id"] for row in report["candidates"]], sorted(set(media) - rejected)
+                )
+                self.assertEqual(
+                    [row["media_id"] for row in report["rejected_candidates"]], sorted(rejected)
+                )
+                for row in report["rejected_candidates"]:
+                    self.assertEqual(
+                        row["source_sha256"], hashlib.sha256(media[row["media_id"]]).hexdigest()
+                    )
+                    self.assertEqual(len(row["source_lines"]), 1)
+                    self.assertEqual(row["rejection_reason"], "unusable_audio")
+                self.assertEqual(len(list(report_path.parent.rglob("*.wav"))), 7)
+                self.assertEqual([item["processed"] for item in progress], [*range(11), 10])
+                self.assertEqual(progress[-1]["state"], "publishing")
+                self.assertTrue(all(item["total"] == 10 for item in progress))
+                self.assertEqual(len(single_calls), 13 if failure_stage == "decode" else 10)
+
+    def test_keeps_rejected_audio_evidence_and_continues_other_characters(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            lines = [
+                story_line(1, "Silent hero."),
+                {
+                    **story_line(2, "Other's usable line.", media_id=30),
+                    "voice_character": "Other",
+                    "speaker": "Other",
+                    "source_bank": "other_story.bnk",
+                    "source_event": "play_other_line",
+                },
+            ]
+            story, index, snapshots = candidate_fixture(
+                root,
+                lines,
+                {
+                    "hero_story.bnk": {10: b"silent", 20: b"silent unlinked"},
+                    "other_story.bnk": {30: b"speech"},
+                },
+            )
+
+            def decode(data, *args, **kwargs):
+                if data.startswith(b"silent"):
+                    raise UnusableVoiceReferenceError("WAV contains no speech-level audio")
+                return decode_candidate(data, *args, **kwargs)
+
+            report_path, report = build_story_voice_candidates(
+                story,
+                index,
+                ["Hero", "Other"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, bank: snapshots[bank],
+                media_decoder=decode,
+                analyzer=clean_metrics,
+                include_unlinked_bank_media=True,
+            )
+            self.assertEqual(report["candidate_count"], 1)
+            self.assertEqual(report["candidates"][0]["character"], "Other")
+            self.assertEqual(report["rejected_candidate_count"], 2)
+            self.assertEqual(report["outcome"], "candidates_prepared")
+            by_media = {item["media_id"]: item for item in report["rejected_candidates"]}
+            self.assertEqual(by_media[10]["source_lines"][0]["line_id"], lines[0]["line_id"])
+            self.assertEqual(by_media[10]["source_sha256"], hashlib.sha256(b"silent").hexdigest())
+            self.assertEqual(by_media[20]["source_lines"], [])
+            self.assertEqual(by_media[20]["candidate_origin"], "exact_bank_unrouted_media")
+            self.assertEqual(by_media[20]["rejection_reason"], "unusable_audio")
+            self.assertIn("no speech-level audio", by_media[20]["error"])
+            self.assertNotIn("reference", by_media[20])
+            self.assertEqual(json.loads(report_path.read_text()), json.loads(json.dumps(report)))
+
+    def test_all_unusable_audio_still_publishes_diagnostics_without_a_manifest(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story, index, snapshots = candidate_fixture(
+                root, [story_line(1, "Silent.")], {"hero_story.bnk": {10: b"silent"}}
+            )
+
+            def analyze(_path):
+                raise UnusableVoiceReferenceError("WAV contains no audio")
+
+            report_path, report = build_story_voice_candidates(
+                story,
+                index,
+                ["Hero"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, bank: snapshots[bank],
+                media_decoder=decode_candidate,
+                analyzer=analyze,
+            )
+            self.assertTrue(report_path.is_file())
+            self.assertEqual(report["outcome"], "no_usable_candidates")
+            self.assertEqual(report["candidates"], [])
+            self.assertEqual(report["groups"], [])
+            self.assertEqual(report["rejected_candidate_count"], 1)
+            self.assertFalse((report_path.parent / "manifest.json").exists())
+            self.assertEqual(list(report_path.parent.rglob("*.wav")), [])
+
+    def test_rejected_audio_does_not_bypass_final_source_integrity_checks(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story, index, snapshots = candidate_fixture(
+                root, [story_line(1, "Silent.")], {"hero_story.bnk": {10: b"silent"}}
+            )
+
+            def decode(*_args, **_kwargs):
+                snapshots["hero_story.bnk"].path.write_bytes(b"bank changed")
+                raise UnusableVoiceReferenceError("WAV contains no audio")
+
+            with self.assertRaisesRegex(StoryVoiceCandidateError, "bank changed"):
+                build_story_voice_candidates(
+                    story,
+                    index,
+                    ["Hero"],
+                    root / "candidates",
+                    decoder="true",
+                    bank_loader=lambda _index, bank: snapshots[bank],
+                    media_decoder=decode,
+                    analyzer=clean_metrics,
+                )
+            self.assertFalse((root / "candidates").exists())
+
+    def test_same_wave_conflicts_also_cross_requested_character_identities(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            lines = [
+                story_line(1, "Hero transcript."),
+                {
+                    **story_line(2, "Other transcript.", media_id=20),
+                    "voice_character": "Other",
+                    "speaker": "Other",
+                    "source_event": "play_other_line",
+                },
+            ]
+            story, index, snapshots = candidate_fixture(
+                root, lines, {"hero_story.bnk": {10: b"same wave", 20: b"same wave"}}
+            )
+            _path, report = build_story_voice_candidates(
+                story,
+                index,
+                ["Hero", "Other"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, bank: snapshots[bank],
+                media_decoder=decode_candidate,
+                analyzer=clean_metrics,
+            )
+            self.assertTrue(all(item["transcript_conflict"] for item in report["candidates"]))
+            self.assertTrue(
+                all(not group["recommended_media_ids_for_audition"] for group in report["groups"])
+            )
+
+    def test_does_not_downgrade_operational_or_invalid_audio_failures(self):
+        for error in (
+            OSError("disk failed"),
+            RuntimeError("decoder unavailable"),
+            AudioConversionError("decoder failed"),
+            VoiceReferenceQualityError("invalid WAV"),
+        ):
+            with self.subTest(error=error), TemporaryDirectory() as directory:
+                root = Path(directory)
+                story, index, snapshots = candidate_fixture(
+                    root, [story_line(1, "Line.")], {"hero_story.bnk": {10: b"audio"}}
+                )
+
+                def decode(*_args, **_kwargs):
+                    raise error
+
+                with self.assertRaises(type(error)):
+                    build_story_voice_candidates(
+                        story,
+                        index,
+                        ["Hero"],
+                        root / "candidates",
+                        decoder="true",
+                        bank_loader=lambda _index, bank: snapshots[bank],
+                        media_decoder=decode,
+                        analyzer=clean_metrics,
+                    )
+                self.assertFalse((root / "candidates").exists())
+
+    def test_reconciles_same_wave_transcripts_across_portraits_banks_and_characters(self):
+        for cross_bank in (False, True):
+            for same_text in (False, True):
+                with (
+                    self.subTest(cross_bank=cross_bank, same_text=same_text),
+                    TemporaryDirectory() as directory,
+                ):
+                    root = Path(directory)
+                    lines = [
+                        story_line(1, "First transcript.", portrait="adult.png"),
+                        {
+                            **story_line(
+                                2,
+                                "First transcript." if same_text else "Conflicting transcript.",
+                                portrait="young.png",
+                                media_id=20,
+                            ),
+                            "source_bank": "other_story.bnk" if cross_bank else "hero_story.bnk",
+                            "source_event": "play_second_line",
+                        },
+                        {
+                            **story_line(3, "Clean control.", media_id=30),
+                            "voice_character": "Other",
+                            "speaker": "Other",
+                            "source_event": "play_other_line",
+                        },
+                    ]
+                    media = {"hero_story.bnk": {10: b"same wave", 30: b"different wave"}}
+                    media.setdefault(lines[1]["source_bank"], {})[20] = b"same wave"
+                    story, index, snapshots = candidate_fixture(root, lines, media)
+                    _path, report = build_story_voice_candidates(
+                        story,
+                        index,
+                        ["Hero", "Other"],
+                        root / "candidates",
+                        decoder="true",
+                        bank_loader=lambda _index, bank: snapshots[bank],
+                        media_decoder=decode_candidate,
+                        analyzer=clean_metrics,
+                    )
+                    duplicates = [
+                        item for item in report["candidates"] if item["character"] == "Hero"
+                    ]
+                    for item in duplicates:
+                        self.assertEqual(item["transcript_conflict"], not same_text)
+                        self.assertTrue(item["technical_pass"])
+                        self.assertEqual(item["metrics"]["technical_flags"], ())
+                        self.assertEqual(len(item["source_lines"]), 1)
+                        self.assertEqual(len(item["reference_source_lines"]), 2)
+                    control = next(
+                        item for item in report["candidates"] if item["character"] == "Other"
+                    )
+                    self.assertFalse(control["transcript_conflict"])
+                    recommendations = [
+                        media_id
+                        for group in report["groups"]
+                        for media_id in group["recommended_media_ids_for_audition"]
+                    ]
+                    self.assertEqual(set(recommendations), {10, 20, 30} if same_text else {30})
 
     def test_manual_picker_accepts_only_playable_main_voice_with_too_long_flag(self):
         candidate = {

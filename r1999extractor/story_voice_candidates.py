@@ -44,6 +44,7 @@ from r1999extractor.story_audio import (
     wwise_event_id,
 )
 from r1999extractor.voice_reference_quality import (
+    UnusableVoiceReferenceError,
     VoiceReferenceQualityError,
     analyze_voice_reference,
 )
@@ -58,6 +59,7 @@ from r1999extractor.wwise import (
 REPORT_SCHEMA = "r1999.story-voice-reference-candidates"
 REPORT_VERSION = 2
 SUPPORTED_REPORT_VERSIONS = frozenset({1, REPORT_VERSION})
+CANDIDATE_ADMISSION_POLICY_VERSION = 1
 
 STORY_LINE_ROUTE = "story_line_route"
 EXACT_BANK_UNROUTED_MEDIA = "exact_bank_unrouted_media"
@@ -515,6 +517,7 @@ def build_story_voice_candidates(
                     grouped[key] = []
 
         candidates = []
+        rejected_candidates = []
         report_source_audio_progress(progress, "references", 0, len(grouped))
 
         def reference_path(identity):
@@ -564,39 +567,57 @@ def build_story_voice_candidates(
                 payload = snapshot.media[media_id]
             return payload, event_ids
 
-        def prepare_reference(item):
-            (_character, _portrait, bank, media_id), _source_lines, relative = item
-            payload, event_ids = reference_source(item)
-            imported = media_decoder(
-                payload,
-                staging / relative,
-                media_id,
-                decoder,
-                bank=bank,
-            )
-            return candidate_record(item, imported, event_ids)
-
-        def candidate_record(item, imported, event_ids):
-            (character, portrait, bank, media_id), source_lines, relative = item
-            metrics = analyzer(imported.path)
-            metrics_document = asdict(metrics)
-            metrics_document["path"] = relative.as_posix()
-            text_hashes = sorted({line.text_sha256 for line in source_lines})
-            candidate_origin = STORY_LINE_ROUTE if source_lines else EXACT_BANK_UNROUTED_MEDIA
+        def source_evidence(item, source_sha256, event_ids):
+            (character, portrait, bank, media_id), source_lines, _relative = item
             return {
                 "character": character,
                 "portrait": portrait,
                 "source_bank": bank,
                 "source_bank_sha256": snapshots[bank].sha256,
                 "media_id": media_id,
-                "source_sha256": imported.source_sha256,
+                "source_sha256": source_sha256,
                 "reference_decode_version": REFERENCE_DECODE_VERSION,
-                "candidate_origin": candidate_origin,
+                "candidate_origin": STORY_LINE_ROUTE if source_lines else EXACT_BANK_UNROUTED_MEDIA,
                 "source_event_ids": event_ids,
+                "source_lines": [asdict(line) for line in source_lines],
+            }
+
+        def rejected_record(item, source_sha256, event_ids, error):
+            (staging / item[2]).unlink(missing_ok=True)
+            return {
+                **source_evidence(item, source_sha256, event_ids),
+                "rejection_reason": "unusable_audio",
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
+
+        def prepare_reference(item):
+            (_character, _portrait, bank, media_id), _source_lines, relative = item
+            payload, event_ids = reference_source(item)
+            try:
+                imported = media_decoder(
+                    payload,
+                    staging / relative,
+                    media_id,
+                    decoder,
+                    bank=bank,
+                )
+            except UnusableVoiceReferenceError as error:
+                return rejected_record(item, hashlib.sha256(payload).hexdigest(), event_ids, error)
+            return candidate_record(item, imported, event_ids)
+
+        def candidate_record(item, imported, event_ids):
+            (character, portrait, _bank, _media_id), _source_lines, relative = item
+            try:
+                metrics = analyzer(imported.path)
+            except UnusableVoiceReferenceError as error:
+                return rejected_record(item, imported.source_sha256, event_ids, error)
+            metrics_document = asdict(metrics)
+            metrics_document["path"] = relative.as_posix()
+            return {
+                **source_evidence(item, imported.source_sha256, event_ids),
                 "reference": relative.as_posix(),
                 "reference_sha256": imported.reference_sha256,
-                "source_lines": [asdict(line) for line in source_lines],
-                "transcript_conflict": len(text_hashes) > 1,
                 "metrics": metrics_document,
                 "technical_pass": not metrics.technical_flags,
                 "manual_content_review_required": True,
@@ -606,13 +627,19 @@ def build_story_voice_candidates(
 
         def prepare_batch(batch):
             sources = [reference_source(item) for item in batch]
-            imported = decode_reference_batch(
-                [
-                    (payload, staging / item[2], item[0][3], item[0][2])
-                    for item, (payload, _event_ids) in zip(batch, sources)
-                ],
-                decoder,
-            )
+            try:
+                imported = decode_reference_batch(
+                    [
+                        (payload, staging / item[2], item[0][3], item[0][2])
+                        for item, (payload, _event_ids) in zip(batch, sources)
+                    ],
+                    decoder,
+                )
+            except UnusableVoiceReferenceError:
+                # A batch cannot identify the unusable item; retry its members individually.
+                for item in batch:
+                    (staging / item[2]).unlink(missing_ok=True)
+                return [prepare_reference(item) for item in batch]
             return [
                 candidate_record(item, reference, event_ids)
                 for item, reference, (_payload, event_ids) in zip(batch, imported, sources)
@@ -639,18 +666,38 @@ def build_story_voice_candidates(
         try:
             for batch in prepared:
                 for candidate in batch:
-                    candidates.append(candidate)
+                    target = rejected_candidates if "rejection_reason" in candidate else candidates
+                    target.append(candidate)
                     report_source_audio_progress(
-                        progress, "references", len(candidates), len(grouped)
+                        progress,
+                        "references",
+                        len(candidates) + len(rejected_candidates),
+                        len(grouped),
                     )
         finally:
             if hasattr(prepared, "close"):
                 prepared.close()
-        candidates.sort(
-            key=lambda value: candidate_order[
-                (value["character"], value["portrait"], value["source_bank"], value["media_id"])
-            ]
-        )
+        for records in (candidates, rejected_candidates):
+            records.sort(
+                key=lambda value: candidate_order[
+                    (value["character"], value["portrait"], value["source_bank"], value["media_id"])
+                ]
+            )
+
+        by_reference = {}
+        for candidate in candidates:
+            by_reference.setdefault(candidate["reference_sha256"], []).append(candidate)
+        for same_audio in by_reference.values():
+            source_lines = {
+                (line["line_id"], line["text_sha256"]): line
+                for candidate in same_audio
+                for line in candidate["source_lines"]
+            }
+            associations = [source_lines[key] for key in sorted(source_lines)]
+            transcript_conflict = len({line["text_sha256"] for line in associations}) > 1
+            for candidate in same_audio:
+                candidate["reference_source_lines"] = associations
+                candidate["transcript_conflict"] = transcript_conflict
 
         groups = []
         group_keys = sorted(
@@ -698,6 +745,7 @@ def build_story_voice_candidates(
         report = {
             "schema": REPORT_SCHEMA,
             "schema_version": REPORT_VERSION,
+            "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "story_index": str(story_index),
             "story_index_sha256": story_sha256,
@@ -705,8 +753,11 @@ def build_story_voice_candidates(
             "bank_index_sha256": bank_index_sha256,
             "roles": sorted({line.character for line in lines}, key=str.casefold),
             "source_line_count": len(lines),
+            "transcript_evidence_scope": "requested_roles",
             "group_count": len(groups),
             "candidate_count": len(candidates),
+            "rejected_candidate_count": len(rejected_candidates),
+            "outcome": "candidates_prepared" if candidates else "no_usable_candidates",
             "bank_inventory_scope": (
                 "complete_exact_bank"
                 if include_all_bank_media
@@ -716,13 +767,18 @@ def build_story_voice_candidates(
             ),
             "groups": groups,
             "candidates": candidates,
+            "rejected_candidates": rejected_candidates,
             "publication_policy": (
                 "Audition evidence only. Do not update a voice manifest until manual "
                 "speaker, contamination and multi-speaker review is complete."
             ),
         }
         report_source_audio_progress(
-            progress, "references", len(candidates), len(grouped), "publishing"
+            progress,
+            "references",
+            len(candidates) + len(rejected_candidates),
+            len(grouped),
+            "publishing",
         )
         atomic_write_json(staging / "report.json", report)
         if sha256_file(story_index) != story_sha256:
@@ -816,6 +872,13 @@ def main(arguments=None):
         WwiseBankError,
     ) as error:
         print(error, file=sys.stderr)
+        return 1
+    if not report["candidate_count"]:
+        print(
+            f"No usable voice candidates; {report['rejected_candidate_count']} "
+            f"unusable audio rejection(s) recorded in {report_path}",
+            file=sys.stderr,
+        )
         return 1
     print(
         f"Prepared {report['candidate_count']} checksum-bound candidates across "

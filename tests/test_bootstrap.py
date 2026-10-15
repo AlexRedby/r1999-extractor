@@ -22,6 +22,7 @@ from r1999extractor.source_audio_progress import (
 )
 from r1999extractor.story_audio import wwise_event_id
 from r1999extractor.story_voice_candidates import (
+    CANDIDATE_ADMISSION_POLICY_VERSION,
     REPORT_SCHEMA,
     REPORT_VERSION,
     collect_story_voice_lines,
@@ -37,6 +38,104 @@ class BootstrapTest(unittest.TestCase):
         )
         registry.start()
         self.addCleanup(registry.stop)
+
+    def test_requires_exact_integer_report_and_admission_policy_versions(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = root / "story.jsonl"
+            story.write_text("{}\n")
+            digest = hashlib.sha256(story.read_bytes()).hexdigest()
+            report = {
+                "schema": REPORT_SCHEMA,
+                "schema_version": REPORT_VERSION,
+                "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                "story_index": str(story),
+                "story_index_sha256": digest,
+                "groups": [],
+                "candidates": [],
+            }
+            manifest = root / "manifest.json"
+            for field, values, message in (
+                (
+                    "admission_policy_version",
+                    (None, True, False, 1.0, "1", 2, []),
+                    "admission policy is stale",
+                ),
+                (
+                    "schema_version",
+                    (None, True, False, 1.0, 2.0, "2", 3, []),
+                    "report story index changed",
+                ),
+            ):
+                for value in values:
+                    with self.subTest(field=field, value=value):
+                        invalid = {**report, field: value}
+                        if value is None:
+                            invalid.pop(field)
+                        with self.assertRaisesRegex(BootstrapError, message):
+                            _publish_player_voice_manifest(
+                                root / "report.json",
+                                invalid,
+                                manifest,
+                                story,
+                                story,
+                                digest,
+                                digest,
+                            )
+            for version in (1, REPORT_VERSION):
+                with self.subTest(supported_version=version):
+                    with self.assertRaisesRegex(BootstrapError, "No technically usable"):
+                        _publish_player_voice_manifest(
+                            root / "report.json",
+                            {**report, "schema_version": version},
+                            manifest,
+                            story,
+                            story,
+                            digest,
+                            digest,
+                        )
+            self.assertFalse(manifest.exists())
+
+    def test_all_rejected_report_survives_retry_without_a_successful_manifest(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "reverse1999"
+            output.mkdir()
+            story = output / "story-index.jsonl"
+            story.write_text("{}\n")
+            (output / "english-bank-index.json").write_text("{}")
+            report_paths = []
+
+            def build(_story, _banks, _roles, destination, **_options):
+                destination.mkdir(parents=True)
+                report = {
+                    "schema": REPORT_SCHEMA,
+                    "schema_version": REPORT_VERSION,
+                    "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                    "story_index": str(story),
+                    "story_index_sha256": hashlib.sha256(story.read_bytes()).hexdigest(),
+                    "outcome": "no_usable_candidates",
+                    "groups": [],
+                    "candidates": [],
+                    "rejected_candidates": [{"media_id": 791255529, "error": "no speech"}],
+                }
+                report_path = destination / "report.json"
+                report_path.write_text(json.dumps(report))
+                report_paths.append(report_path)
+                return report_path, report
+
+            with patch(
+                "r1999extractor.bootstrap.build_story_voice_candidates", side_effect=build
+            ) as builder:
+                for _attempt in range(2):
+                    with self.assertRaisesRegex(
+                        BootstrapError, "1 unusable audio rejection"
+                    ) as raised:
+                        prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
+                    self.assertIn(str(report_paths[0]), str(raised.exception))
+                    self.assertTrue(report_paths[0].is_file())
+                    self.assertFalse((report_paths[0].parent / "manifest.json").exists())
+                self.assertEqual(builder.call_count, 1)
 
     def test_publishes_manual_too_long_playable_candidate_with_checksum_bound_excerpt(self):
         with TemporaryDirectory() as directory:
@@ -79,6 +178,7 @@ class BootstrapTest(unittest.TestCase):
             report = {
                 "schema": REPORT_SCHEMA,
                 "schema_version": REPORT_VERSION,
+                "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
                 "story_index": str(reference_index.resolve()),
                 "story_index_sha256": reference_sha256,
                 "groups": [
@@ -109,7 +209,7 @@ class BootstrapTest(unittest.TestCase):
 
         evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
         variant = evidence["variants"][0]
-        self.assertEqual(evidence["schema_version"], 4)
+        self.assertEqual(evidence["schema_version"], 5)
         self.assertEqual(len(manifest["voices"]), 1)
         self.assertEqual(
             variant["source_line_ids"],
@@ -174,6 +274,7 @@ class BootstrapTest(unittest.TestCase):
             report = {
                 "schema": REPORT_SCHEMA,
                 "schema_version": REPORT_VERSION,
+                "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
                 "story_index": str(reference_index.resolve()),
                 "story_index_sha256": hashlib.sha256(reference_index.read_bytes()).hexdigest(),
                 "groups": [
@@ -498,6 +599,7 @@ class BootstrapTest(unittest.TestCase):
                 report = {
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
+                    "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
                     "story_index": str(story.resolve()),
                     "story_index_sha256": story_digest,
                     "groups": [
@@ -558,11 +660,30 @@ class BootstrapTest(unittest.TestCase):
                 self.assertEqual([event["processed"] for event in events], [0, 1, 1])
                 second = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
                 self.assertEqual(builds, [("Hero",)])
+                for version in (None, True, False, 5.0, "5", 4, []):
+                    with self.subTest(cached_manifest_version=version):
+                        cached_manifest = json.loads(first.read_text(encoding="utf-8"))
+                        cached_evidence = cached_manifest[PLAYER_VOICE_CANDIDATES_FIELD]
+                        if version is None:
+                            cached_evidence.pop("schema_version")
+                        else:
+                            cached_evidence["schema_version"] = version
+                        first.write_text(json.dumps(cached_manifest), encoding="utf-8")
+                        self.assertEqual(
+                            prepare_player_voice_candidates(roles=("Hero",), data_directory=root),
+                            first,
+                        )
+                        refreshed = json.loads(first.read_text(encoding="utf-8"))
+                        refreshed_version = refreshed[PLAYER_VOICE_CANDIDATES_FIELD][
+                            "schema_version"
+                        ]
+                        self.assertIs(type(refreshed_version), int)
+                        self.assertEqual(refreshed_version, 5)
                 with patch("r1999extractor.bootstrap.REFERENCE_DECODE_VERSION", 3):
                     new_policy = prepare_player_voice_candidates(
                         roles=("Hero",), data_directory=root
                     )
-                with patch("r1999extractor.bootstrap.PLAYER_VOICE_CANDIDATE_CATALOG_VERSION", 6):
+                with patch("r1999extractor.bootstrap.PLAYER_VOICE_CANDIDATE_CATALOG_VERSION", 7):
                     new_catalog = prepare_player_voice_candidates(
                         roles=("Hero",), data_directory=root
                     )
@@ -653,6 +774,7 @@ class BootstrapTest(unittest.TestCase):
                 report = {
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
+                    "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
                     "story_index": str(Path(source).resolve()),
                     "story_index_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest(),
                     "groups": [
@@ -756,6 +878,7 @@ class BootstrapTest(unittest.TestCase):
                 report = {
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
+                    "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
                     "story_index": str(Path(source).resolve()),
                     "story_index_sha256": "0" * 64,
                     "groups": [],
@@ -795,6 +918,7 @@ class BootstrapTest(unittest.TestCase):
                 report = {
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
+                    "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
                     "story_index": str(Path(source).resolve()),
                     "story_index_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest(),
                     "groups": [],

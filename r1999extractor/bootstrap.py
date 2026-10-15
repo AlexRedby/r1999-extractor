@@ -49,6 +49,7 @@ from r1999extractor.story_index import (
 )
 from r1999extractor.story_portraits import StoryPortraitError, extract_story_portraits
 from r1999extractor.story_voice_candidates import (
+    CANDIDATE_ADMISSION_POLICY_VERSION,
     REPORT_SCHEMA,
     SUPPORTED_REPORT_VERSIONS,
     build_story_voice_candidates,
@@ -57,8 +58,8 @@ from r1999extractor.structured_story import audit_story_like_tables
 
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
-PLAYER_VOICE_CANDIDATES_VERSION = 4
-PLAYER_VOICE_CANDIDATE_CATALOG_VERSION = 5
+PLAYER_VOICE_CANDIDATES_VERSION = 5
+PLAYER_VOICE_CANDIDATE_CATALOG_VERSION = 6
 DISCOVERY_LOGGER_NAME = "r1999extractor.discovery"
 
 
@@ -163,6 +164,7 @@ def prepare_player_voice_candidates(
             evidence = manifest.get(PLAYER_VOICE_CANDIDATES_FIELD, {})
             if (
                 evidence.get("story_index_sha256") == target_story_sha256
+                and type(evidence.get("schema_version")) is int
                 and evidence.get("schema_version") == PLAYER_VOICE_CANDIDATES_VERSION
             ):
                 return manifest_path
@@ -211,6 +213,7 @@ def _publish_player_voice_manifest(
     if (
         not isinstance(report, dict)
         or report.get("schema") != REPORT_SCHEMA
+        or type(report.get("schema_version")) is not int
         or report.get("schema_version") not in SUPPORTED_REPORT_VERSIONS
         or Path(report.get("story_index", "")).expanduser().resolve() != reference_story_index
         or report.get("story_index_sha256") != reference_story_sha256
@@ -218,6 +221,11 @@ def _publish_player_voice_manifest(
         or sha256_file(target_story_index) != target_story_sha256
     ):
         raise BootstrapError("Voice candidate report story index changed")
+    if (
+        type(report.get("admission_policy_version")) is not int
+        or report.get("admission_policy_version") != CANDIDATE_ADMISSION_POLICY_VERSION
+    ):
+        raise BootstrapError("Voice candidate report admission policy is stale; rebuild candidates")
     recommended = {
         (
             group.get("character"),
@@ -361,7 +369,11 @@ def _publish_player_voice_manifest(
             }
         )
     if not voices:
-        raise BootstrapError("No technically usable character voice candidates were found")
+        raise BootstrapError(
+            "No technically usable character voice candidates were found; "
+            f"{len(report.get('rejected_candidates', ()))} unusable audio rejection(s) "
+            f"recorded in {report_path}"
+        )
     report_sha256 = sha256_file(report_path)
     manifest = {
         "version": 2,

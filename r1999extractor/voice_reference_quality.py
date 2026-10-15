@@ -16,6 +16,10 @@ class VoiceReferenceQualityError(RuntimeError):
     pass
 
 
+class UnusableVoiceReferenceError(VoiceReferenceQualityError):
+    """Valid decoded audio has no signal suitable for a speech reference."""
+
+
 @dataclass(frozen=True)
 class VoiceReferenceMetrics:
     path: str
@@ -87,7 +91,7 @@ def _frame_rms(samples, frame_size):
 def analyze_voice_reference(path, *, silence_dbfs=-42.0, frame_ms=20):
     samples, sample_rate = read_pcm_wav(path)
     if not len(samples):
-        raise VoiceReferenceQualityError(f"WAV contains no audio: {path}")
+        raise UnusableVoiceReferenceError(f"WAV contains no audio: {path}")
     duration = len(samples) / sample_rate
     peak = float(np.max(np.abs(samples)))
     rms = float(np.sqrt(np.mean(np.square(samples))))
@@ -156,20 +160,20 @@ def trim_and_normalize_voice_reference(
 ):
     samples, sample_rate = read_pcm_wav(source)
     if not len(samples):
-        raise VoiceReferenceQualityError(f"WAV contains no audio: {source}")
+        raise UnusableVoiceReferenceError(f"WAV contains no audio: {source}")
     frame_ms = 10
     frame_size = max(1, round(sample_rate * frame_ms / 1000))
     active = _frame_rms(samples, frame_size) > 10 ** (silence_dbfs / 20.0)
     active_frames = np.flatnonzero(active)
     if not len(active_frames):
-        raise VoiceReferenceQualityError(f"WAV contains no speech-level audio: {source}")
+        raise UnusableVoiceReferenceError(f"WAV contains no speech-level audio: {source}")
     padding = round(sample_rate * padding_ms / 1000)
     start = max(0, int(active_frames[0]) * frame_size - padding)
     end = min(len(samples), (int(active_frames[-1]) + 1) * frame_size + padding)
     normalized = samples[start:end].copy()
     peak = float(np.max(np.abs(normalized)))
     if peak <= 1e-9:
-        raise VoiceReferenceQualityError(f"WAV contains no audible signal: {source}")
+        raise UnusableVoiceReferenceError(f"WAV contains no audible signal: {source}")
     target_peak = 10 ** (peak_dbfs / 20.0)
     normalized *= target_peak / peak
     fade_samples = min(round(sample_rate * fade_ms / 1000), len(normalized) // 2)
