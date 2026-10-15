@@ -1,14 +1,65 @@
-"""Optional Whisper model with checked reuse of identical CPU beam rows."""
+"""Optional Whisper model with checked reuse of redundant CPU generation work."""
 
 from weakref import ref
 
 import torch
 from transformers import WhisperForConditionalGeneration
 from transformers.cache_utils import DynamicCache, DynamicLayer, EncoderDecoderCache
+from transformers.generation.logits_process import SuppressTokensLogitsProcessor
+from transformers.pytorch_utils import isin_mps_friendly
+
+
+class _CpuSuppressTokensLogitsProcessor(SuppressTokensLogitsProcessor):
+    """Reuse only the unchanged native CPU suppression mask."""
+
+    def __init__(self, processor):
+        self.suppress_tokens = processor.suppress_tokens
+        self._mask_snapshot = None
+
+    def __call__(self, input_ids, scores):
+        tokens = self.suppress_tokens
+        if (
+            type(scores) is not torch.Tensor
+            or scores.device.type != "cpu"
+            or scores.layout != torch.strided
+            or scores.ndim != 2
+            or type(tokens) is not torch.Tensor
+            or tokens.device.type != "cpu"
+            or tokens.layout != torch.strided
+            or tokens.dtype != torch.int64
+            or tokens.ndim != 1
+        ):
+            return super().__call__(input_ids, scores)
+        snapshot = self._mask_snapshot
+        if (
+            snapshot is None
+            or snapshot[0] != scores.shape[-1]
+            or not torch.equal(snapshot[1], tokens)
+        ):
+            mask = isin_mps_friendly(torch.arange(scores.shape[-1], device=scores.device), tokens)
+            snapshot = (scores.shape[-1], tokens.clone(), mask)
+            self._mask_snapshot = snapshot
+        return torch.where(snapshot[2], -float("inf"), scores)
 
 
 class CpuWhisperForConditionalGeneration(WhisperForConditionalGeneration):
-    """Keep normal generation while avoiding proven redundant CPU cache copies."""
+    """Keep normal generation while avoiding proven redundant CPU work."""
+
+    def _retrieve_logit_processors(
+        self, generation_config, logits_processor, begin_index, num_beams, device
+    ):
+        supplied = tuple(logits_processor or ())
+        processors = super()._retrieve_logit_processors(
+            generation_config, logits_processor, begin_index, num_beams, device
+        )
+        for index, processor in enumerate(processors or ()):
+            if (
+                type(processor) is SuppressTokensLogitsProcessor
+                and processor.suppress_tokens.device.type == "cpu"
+                and all(processor is not item for item in supplied)
+            ):
+                processors[index] = _CpuSuppressTokensLogitsProcessor(processor)
+        return processors
 
     def _reorder_cache(self, cache, beam_idx):
         if self._can_reuse_cross_cache(cache, beam_idx):

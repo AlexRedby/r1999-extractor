@@ -253,7 +253,8 @@ def publish_source_audio_semantic_evidence(
         }
         cache_key = _canonical_sha256(cache_identity)
         cache_path = cache_root / f"{cache_key}.json" if cache_root is not None else None
-        observed = cached_transcripts.get(cache_key)
+        media_key = (media_id, identity[2])
+        observed = cached_transcripts.get(media_key)
         if observed is None and cache_path is not None:
             try:
                 cached = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -284,7 +285,7 @@ def publish_source_audio_semantic_evidence(
                 }
                 cached["checksum"] = _canonical_sha256(cached)
                 new_cache_entries.append((cache_path, cached))
-        cached_transcripts[cache_key] = observed
+        cached_transcripts[media_key] = observed
         if not observed:
             raise SourceAudioSemanticEvidenceError(
                 f"ASR returned no transcript for {record['line_id']}"
