@@ -1,18 +1,87 @@
 import hashlib
+import io
 import json
 import unittest
+import wave
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import numpy as np
 from vntts_artifacts.story_index import load_story_index_document, write_story_index_document
 
 from r1999extractor.source_audio_semantics import (
+    SEMANTIC_EVIDENCE_PREPROCESSING,
     SourceAudioSemanticEvidenceError,
+    WhisperTranscriber,
+    _canonical_sha256,
     load_source_audio_semantic_evidence,
     normalize_semantic_text,
     publish_source_audio_semantic_evidence,
 )
+
+
+class WhisperTranscriberTest(unittest.TestCase):
+    def _transcribe(self, payload):
+        transcriber = WhisperTranscriber.__new__(WhisperTranscriber)
+        transcriber._pipeline = Mock(return_value={"text": " Words. "})
+        self.assertEqual(transcriber(payload), "Words.")
+        args, kwargs = transcriber._pipeline.call_args
+        self.assertEqual(kwargs, {"return_timestamps": True})
+        self.assertEqual(args[0]["sampling_rate"], 16_000)
+        self.assertEqual(args[0]["array"].dtype, np.float32)
+        return args[0]["array"]
+
+    def test_native_16k_preserves_normalized_pcm_exactly(self):
+        pcm = np.array([-32768, -32000, -1, 0, 1, 12345, 32767], dtype="<i2")
+        with patch("scipy.signal.resample_poly") as resample:
+            actual = self._transcribe(_wav_bytes(pcm, 16_000))
+        np.testing.assert_array_equal(actual, pcm.astype(np.float32) / 32768.0)
+        resample.assert_not_called()
+
+    def test_resampling_preserves_duration_pitch_amplitude_and_event_time(self):
+        for rate in (24_000, 48_000, 44_100):
+            with self.subTest(rate=rate):
+                time = np.arange(rate) / rate
+                pcm = 8_000 * np.sin(2 * np.pi * 440 * time)
+                pcm[(time < 0.25) | (time >= 0.75)] = 0
+                actual = self._transcribe(_wav_bytes(pcm, rate))
+                self.assertEqual(len(actual), 16_000)
+                spectrum = np.abs(np.fft.rfft(actual))
+                self.assertEqual(int(spectrum.argmax()), 440)
+                self.assertAlmostEqual(float(np.max(actual)), 8_000 / 32768.0, places=2)
+                active = np.flatnonzero(np.abs(actual) > 0.05)
+                self.assertLess(abs(active[0] / 16_000 - 0.25), 0.002)
+                self.assertLess(abs(active[-1] / 16_000 - 0.75), 0.002)
+
+    def test_non_integral_output_duration_rounds_up_one_sample(self):
+        for rate in (24_000, 48_000, 44_100):
+            with self.subTest(rate=rate):
+                pcm = np.ones(1001, dtype="<i2")
+                actual = self._transcribe(_wav_bytes(pcm, rate))
+                self.assertEqual(len(actual), (len(pcm) * 16_000 + rate - 1) // rate)
+
+    def test_rejects_non_mono_pcm16_and_malformed_wav_before_pipeline(self):
+        transcriber = WhisperTranscriber.__new__(WhisperTranscriber)
+        transcriber._pipeline = Mock()
+        for channels, sample_width in ((2, 2), (1, 1), (1, 3)):
+            with self.subTest(channels=channels, sample_width=sample_width):
+                payload = _wav_bytes(np.zeros(20), 24_000, channels, sample_width)
+                with self.assertRaisesRegex(SourceAudioSemanticEvidenceError, "mono PCM16 WAV"):
+                    transcriber(payload)
+        with self.assertRaisesRegex(SourceAudioSemanticEvidenceError, "Unable to transcribe"):
+            transcriber(b"not a WAV")
+        transcriber._pipeline.assert_not_called()
+
+
+def _wav_bytes(pcm, rate, channels=1, sample_width=2):
+    output = io.BytesIO()
+    with wave.open(output, "wb") as destination:
+        destination.setnchannels(channels)
+        destination.setsampwidth(sample_width)
+        destination.setframerate(rate)
+        destination.writeframes(np.asarray(pcm, dtype="<i2").tobytes())
+    return output.getvalue()
 
 
 class SourceAudioSemanticsTest(unittest.TestCase):
@@ -315,6 +384,121 @@ class SourceAudioSemanticsTest(unittest.TestCase):
                 "model binding changed",
             ):
                 load_source_audio_semantic_evidence(evidence)
+
+    def test_changed_model_or_decoder_does_not_publish_evidence_or_cache(self):
+        payload = b"exact-stop"
+
+        class Resolver:
+            @staticmethod
+            def read_single_available_media(_resolution):
+                return 11, payload
+
+        for changed_input in ("model", "decoder"):
+            with self.subTest(changed_input=changed_input), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source.jsonl"
+                write_story_index_document(
+                    source, {"language": "en"}, [_record(1, "Stop it.", 11, payload)]
+                )
+                model = root / "model"
+                model.mkdir()
+                model_file = model / "config.json"
+                model_file.write_bytes(b"model")
+                decoder = root / "decoder"
+                decoder.write_bytes(b"decoder")
+
+                def transcribe(_wav):
+                    target = model_file if changed_input == "model" else decoder
+                    target.write_bytes(b"changed bytes")
+                    return "Stop it."
+
+                with (
+                    patch("r1999extractor.source_audio_semantics._decode_wem", return_value=b"wav"),
+                    self.assertRaisesRegex(SourceAudioSemanticEvidenceError, "changed during"),
+                ):
+                    publish_source_audio_semantic_evidence(
+                        source,
+                        "unused-bank",
+                        root / "evidence.json",
+                        root / "story.jsonl",
+                        model,
+                        decoder=decoder,
+                        resolver=Resolver(),
+                        transcriber=transcribe,
+                        cache_dir=root / "cache",
+                    )
+                self.assertFalse((root / "evidence.json").exists())
+                self.assertFalse((root / "story.jsonl").exists())
+                self.assertFalse((root / "cache").exists())
+
+    def test_legacy_cache_is_retranscribed_and_new_recipe_is_reused(self):
+        payload = b"exact-stop"
+
+        class Resolver:
+            @staticmethod
+            def read_single_available_media(_resolution):
+                return 11, payload
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.jsonl"
+            write_story_index_document(
+                source,
+                {"language": "en"},
+                [_record(1, "Stop it.", 11, payload)],
+            )
+            decoder = root / "decoder"
+            decoder.write_bytes(b"decoder")
+            transcriber = Mock(return_value="Stop it.")
+
+            def publish(name):
+                with patch(
+                    "r1999extractor.source_audio_semantics._decode_wem", return_value=b"wav"
+                ):
+                    return publish_source_audio_semantic_evidence(
+                        source,
+                        "unused-bank",
+                        root / f"{name}-evidence.json",
+                        root / f"{name}-story.jsonl",
+                        "unused-model",
+                        model_sha256="a" * 64,
+                        decoder=decoder,
+                        resolver=Resolver(),
+                        transcriber=transcriber,
+                        cache_dir=root / "cache",
+                    )
+
+            publish("initial")
+            cache_path = next((root / "cache" / "semantics").glob("*.json"))
+            legacy = json.loads(cache_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                legacy["identity"].pop("preprocessing"), SEMANTIC_EVIDENCE_PREPROCESSING
+            )
+            legacy.pop("checksum")
+            legacy["checksum"] = _canonical_sha256(legacy)
+            legacy_path = cache_path.with_name(f"{_canonical_sha256(legacy['identity'])}.json")
+            legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+            cache_path.unlink()
+            transcriber.reset_mock()
+
+            migrated = publish("migrated")
+            self.assertEqual(migrated.metadata["source_audio_semantics"]["cache_hits"], 0)
+            self.assertEqual(migrated.metadata["source_audio_semantics"]["asr_calls"], 1)
+            transcriber.assert_called_once_with(b"wav")
+            self.assertEqual(json.loads(legacy_path.read_text(encoding="utf-8")), legacy)
+            warm = publish("warm")
+            self.assertEqual(warm.metadata["source_audio_semantics"]["cache_hits"], 1)
+            self.assertEqual(warm.metadata["source_audio_semantics"]["asr_calls"], 0)
+            transcriber.assert_called_once()
+            authority = load_source_audio_semantic_evidence(root / "warm-evidence.json")
+            self.assertEqual(authority["model"]["preprocessing"], SEMANTIC_EVIDENCE_PREPROCESSING)
+            authority["model"].pop("preprocessing")
+            authority.pop("generated_at")
+            authority.pop("evidence_id")
+            authority["evidence_id"] = _canonical_sha256(authority)
+            legacy_evidence = root / "legacy-evidence.json"
+            legacy_evidence.write_text(json.dumps(authority), encoding="utf-8")
+            self.assertEqual(load_source_audio_semantic_evidence(legacy_evidence), authority)
 
     def test_shared_cache_analyzes_only_new_stage_and_invalidates_changed_inputs(self):
         payloads = {11: b"stage-a", 22: b"stage-b"}

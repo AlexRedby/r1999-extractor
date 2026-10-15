@@ -36,6 +36,7 @@ from r1999extractor.wwise import AudioConversionError, convert_audio, resolve_de
 SEMANTIC_EVIDENCE_SCHEMA = "r1999.source-audio-semantic-evidence"
 SEMANTIC_EVIDENCE_VERSION = 1
 SEMANTIC_EVIDENCE_METHOD = "local-asr-exact-normalized-transcript"
+SEMANTIC_EVIDENCE_PREPROCESSING = "mono-pcm16-resample-poly-16000-v1"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 WORD_PATTERN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", flags=re.UNICODE)
 
@@ -133,10 +134,14 @@ class WhisperTranscriber:
                     source.readframes(source.getnframes()),
                     dtype="<i2",
                 ).astype(np.float32)
-                audio = {
-                    "array": samples / 32768.0,
-                    "sampling_rate": source.getframerate(),
-                }
+                samples /= 32768.0
+                rate = source.getframerate()
+                # Supply Whisper's native rate; Transformers 4.57.6 misresamples other rates.
+                if rate != 16_000:
+                    from scipy.signal import resample_poly
+
+                    samples = np.asarray(resample_poly(samples, 16_000, rate), dtype=np.float32)
+                audio = {"array": samples, "sampling_rate": 16_000}
             result = self._pipeline(audio, return_timestamps=True)
             text = result.get("text") if isinstance(result, dict) else None
             if not isinstance(text, str) or not text.strip():
@@ -244,6 +249,7 @@ def publish_source_audio_semantic_evidence(
             "displayed_text_sha256": identity[3],
             "normalized_displayed_text_sha256": identity[4],
             "method": SEMANTIC_EVIDENCE_METHOD,
+            "preprocessing": SEMANTIC_EVIDENCE_PREPROCESSING,
         }
         cache_key = _canonical_sha256(cache_identity)
         cache_path = cache_root / f"{cache_key}.json" if cache_root is not None else None
@@ -370,6 +376,7 @@ def publish_source_audio_semantic_evidence(
             "sha256": before_model_sha256,
             "device": device,
             "decoding": "deterministic_greedy_default",
+            "preprocessing": SEMANTIC_EVIDENCE_PREPROCESSING,
         },
         "entries": canonical_entries,
     }
