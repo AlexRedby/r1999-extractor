@@ -668,10 +668,11 @@ def create_parser():
 def main(arguments=None):
     options = create_parser().parse_args(arguments)
     if options.progress_file is not None and (
-        options.progress_file.expanduser().resolve().is_relative_to(
-            options.model.expanduser().resolve()
-        )
-        or options.progress_file.expanduser().resolve() in {
+        options.progress_file.expanduser()
+        .resolve()
+        .is_relative_to(options.model.expanduser().resolve())
+        or options.progress_file.expanduser().resolve()
+        in {
             path.expanduser().resolve()
             for path in (
                 options.story_index,

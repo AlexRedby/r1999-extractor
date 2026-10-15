@@ -33,14 +33,17 @@ class SourceAudioProgressTest(unittest.TestCase):
                 self.assertEqual(json.loads(path.read_text())["state"], "publishing")
                 report_source_audio_progress(writer, "semantics", 0, 2)
                 self.assertEqual(json.loads(path.read_text())["stage"], "semantics")
-            self.assertEqual(initial, {
-                "schema": "r1999.source-audio-progress",
-                "schema_version": 1,
-                "stage": "duration",
-                "processed": 0,
-                "total": 3,
-                "state": "analyzing",
-            })
+            self.assertEqual(
+                initial,
+                {
+                    "schema": "r1999.source-audio-progress",
+                    "schema_version": 1,
+                    "stage": "duration",
+                    "processed": 0,
+                    "total": 3,
+                    "state": "analyzing",
+                },
+            )
 
     def test_default_cli_stdout_and_optional_side_channel(self):
         commands = [
@@ -48,35 +51,57 @@ class SourceAudioProgressTest(unittest.TestCase):
                 source_audio_duration,
                 "annotate_story_index_source_audio_durations",
                 ["--story-index", "source", "--bank-index", "banks", "--output", "out"],
-                {"source_audio_timing": {
-                    "measured_count": 1, "eligible_count": 2,
-                    "cache_hits": 1, "decoder_probes": 0,
-                }},
+                {
+                    "source_audio_timing": {
+                        "measured_count": 1,
+                        "eligible_count": 2,
+                        "cache_hits": 1,
+                        "decoder_probes": 0,
+                    }
+                },
                 "Measured 1/2 exact source voices (1 cached, 0 decoder probes); wrote out\n",
             ),
             (
                 source_audio_semantics,
                 "publish_source_audio_semantic_evidence",
-                ["--story-index", "source", "--bank-index", "banks", "--model", "model",
-                 "--evidence-output", "evidence", "--story-output", "out"],
-                {"source_audio_semantics": {
-                    "applied_count": 2, "cache_hits": 1, "asr_calls": 1,
-                }},
+                [
+                    "--story-index",
+                    "source",
+                    "--bank-index",
+                    "banks",
+                    "--model",
+                    "model",
+                    "--evidence-output",
+                    "evidence",
+                    "--story-output",
+                    "out",
+                ],
+                {
+                    "source_audio_semantics": {
+                        "applied_count": 2,
+                        "cache_hits": 1,
+                        "asr_calls": 1,
+                    }
+                },
                 "Applied 2 exact semantic decisions (1 cached, 1 ASR calls); wrote out\n",
             ),
         ]
         for module, publisher, arguments, metadata, expected in commands:
             with self.subTest(module=module.__name__):
-                with patch.object(module, publisher, return_value=SimpleNamespace(
-                    metadata=metadata, path=Path("out")
-                )) as publish:
+                with patch.object(
+                    module,
+                    publisher,
+                    return_value=SimpleNamespace(metadata=metadata, path=Path("out")),
+                ) as publish:
                     stdout = io.StringIO()
                     with redirect_stdout(stdout):
                         self.assertEqual(module.main(arguments), 0)
                     self.assertEqual(stdout.getvalue(), expected)
                     self.assertIsNone(publish.call_args.kwargs["progress"])
                     with redirect_stdout(io.StringIO()):
-                        self.assertEqual(module.main(arguments + ["--progress-file", "progress"]), 0)
+                        self.assertEqual(
+                            module.main(arguments + ["--progress-file", "progress"]), 0
+                        )
                     self.assertIsInstance(
                         publish.call_args.kwargs["progress"], SourceAudioProgressFile
                     )
@@ -87,9 +112,9 @@ class SourceAudioProgressTest(unittest.TestCase):
                     publish.assert_not_called()
                     if module is source_audio_semantics:
                         with redirect_stderr(io.StringIO()):
-                            self.assertEqual(module.main(
-                                arguments + ["--progress-file", "model/config.json"]
-                            ), 1)
+                            self.assertEqual(
+                                module.main(arguments + ["--progress-file", "model/config.json"]), 1
+                            )
                         publish.assert_not_called()
 
 

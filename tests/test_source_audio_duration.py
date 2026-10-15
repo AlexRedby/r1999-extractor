@@ -224,16 +224,30 @@ class SourceAudioDurationTest(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "source.jsonl"
-            records = [{
-                "record_type": "line", "line_id": f"line:{sequence}",
-                "chapter": chapter, "sequence": sequence, "text": "Hello.", "speaker": "Ada",
-                "kind": "dialogue", "source_audio_status": status,
-                "source_bank": "voice.bnk", "source_media_ids": [99],
-                "available_media_ids": [99],
-            } for sequence, (chapter, status) in enumerate([
-                ("7", "available"), ("7", "available"),
-                ("8", "available"), ("7", "absent"),
-            ], start=1)]
+            records = [
+                {
+                    "record_type": "line",
+                    "line_id": f"line:{sequence}",
+                    "chapter": chapter,
+                    "sequence": sequence,
+                    "text": "Hello.",
+                    "speaker": "Ada",
+                    "kind": "dialogue",
+                    "source_audio_status": status,
+                    "source_bank": "voice.bnk",
+                    "source_media_ids": [99],
+                    "available_media_ids": [99],
+                }
+                for sequence, (chapter, status) in enumerate(
+                    [
+                        ("7", "available"),
+                        ("7", "available"),
+                        ("8", "available"),
+                        ("7", "absent"),
+                    ],
+                    start=1,
+                )
+            ]
             write_story_index_document(source, {"language": "en"}, records)
 
             class Probe:
@@ -241,29 +255,42 @@ class SourceAudioDurationTest(unittest.TestCase):
                 decoder_probes = 0
 
                 def __init__(self):
-                    self.results = iter([
-                        SourceAudioTiming(1.25, 99, "b" * 64, 24000, 30000, "r-test"), None,
-                    ])
+                    self.results = iter(
+                        [
+                            SourceAudioTiming(1.25, 99, "b" * 64, 24000, 30000, "r-test"),
+                            None,
+                        ]
+                    )
 
                 def probe(self, _resolution):
                     return next(self.results)
 
             events = []
             result = annotate_story_index_source_audio_durations(
-                source, "unused", root / "out.jsonl", chapters=("7",),
-                probe=Probe(), progress=events.append,
+                source,
+                "unused",
+                root / "out.jsonl",
+                chapters=("7",),
+                probe=Probe(),
+                progress=events.append,
             )
             self.assertEqual(result.metadata["source_audio_timing"]["cache_hits"], 1)
             self.assertEqual(result.metadata["source_audio_timing"]["untimed_count"], 1)
             self.assertEqual([event["processed"] for event in events], [0, 1, 2, 2])
             self.assertEqual({event["total"] for event in events}, {2})
             failed_events = []
-            with patch("r1999extractor.source_audio_duration.write_story_index_document",
-                       side_effect=OSError("publication failed")):
+            with patch(
+                "r1999extractor.source_audio_duration.write_story_index_document",
+                side_effect=OSError("publication failed"),
+            ):
                 with self.assertRaisesRegex(OSError, "publication failed"):
                     annotate_story_index_source_audio_durations(
-                        source, "unused", root / "failed.jsonl", chapters=("7",),
-                        probe=Probe(), progress=failed_events.append,
+                        source,
+                        "unused",
+                        root / "failed.jsonl",
+                        chapters=("7",),
+                        probe=Probe(),
+                        progress=failed_events.append,
                     )
             self.assertEqual(failed_events[-1]["state"], "publishing")
             self.assertFalse((root / "failed.jsonl").exists())

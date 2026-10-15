@@ -376,7 +376,9 @@ class BootstrapTest(unittest.TestCase):
         stderr = io.StringIO()
         stdout = io.StringIO()
         with (
-            patch("r1999extractor.bootstrap.bootstrap_local_artifacts", return_value=result) as build,
+            patch(
+                "r1999extractor.bootstrap.bootstrap_local_artifacts", return_value=result
+            ) as build,
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
@@ -385,7 +387,9 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "Built 7 story lines and source artifacts\n")
         self.assertNotIn("Unable to find", stderr.getvalue())
-        with patch("r1999extractor.bootstrap.bootstrap_local_artifacts", return_value=result) as build:
+        with patch(
+            "r1999extractor.bootstrap.bootstrap_local_artifacts", return_value=result
+        ) as build:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 self.assertEqual(main(["--progress-file", "unused-progress.json"]), 0)
             self.assertTrue(callable(build.call_args.kwargs["progress"]))
@@ -418,19 +422,29 @@ class BootstrapTest(unittest.TestCase):
             root = Path(directory)
             target = root / "external-story.jsonl"
             arguments = [
-                "--prepare-voice-candidates-only", "--voice-candidate-role", "Hero",
-                "--data-directory", str(root), "--target-story-index", str(target),
+                "--prepare-voice-candidates-only",
+                "--voice-candidate-role",
+                "Hero",
+                "--data-directory",
+                str(root),
+                "--target-story-index",
+                str(target),
             ]
-            with patch("r1999extractor.bootstrap.prepare_player_voice_candidates",
-                       return_value=Path("manifest.json")) as prepare:
+            with patch(
+                "r1999extractor.bootstrap.prepare_player_voice_candidates",
+                return_value=Path("manifest.json"),
+            ) as prepare:
                 stdout = io.StringIO()
                 with redirect_stdout(stdout):
-                    self.assertEqual(main(arguments + [
-                        "--progress-file", str(root / "progress.json")
-                    ]), 0)
+                    self.assertEqual(
+                        main(arguments + ["--progress-file", str(root / "progress.json")]), 0
+                    )
                 self.assertEqual(json.loads(stdout.getvalue()), {"voice_manifest": "manifest.json"})
                 self.assertIsInstance(prepare.call_args.kwargs["progress"], SourceAudioProgressFile)
-                for protected in (target, root / "reverse1999" / "voice-candidates" / "report.json"):
+                for protected in (
+                    target,
+                    root / "reverse1999" / "voice-candidates" / "report.json",
+                ):
                     prepare.reset_mock()
                     with redirect_stderr(io.StringIO()):
                         self.assertEqual(main(arguments + ["--progress-file", str(protected)]), 1)
@@ -535,8 +549,11 @@ class BootstrapTest(unittest.TestCase):
                     roles=("Hero",), data_directory=root, progress=events.append
                 )
                 portraits.assert_called_once_with(
-                    bundles.resolve(), {"hero.png"}, (output / "portraits").resolve(),
-                    cache_key=story_digest, progress=events.append,
+                    bundles.resolve(),
+                    {"hero.png"},
+                    (output / "portraits").resolve(),
+                    cache_key=story_digest,
+                    progress=events.append,
                 )
                 self.assertEqual([event["processed"] for event in events], [0, 1, 1])
                 second = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)

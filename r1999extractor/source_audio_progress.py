@@ -30,14 +30,16 @@ def report_source_audio_progress(
     state: SourceAudioState = "analyzing",
 ) -> None:
     if callback is not None:
-        callback({
-            "schema": "r1999.source-audio-progress",
-            "schema_version": 1,
-            "stage": stage,
-            "processed": processed,
-            "total": total,
-            "state": state,
-        })
+        callback(
+            {
+                "schema": "r1999.source-audio-progress",
+                "schema_version": 1,
+                "stage": stage,
+                "processed": processed,
+                "total": total,
+                "state": state,
+            }
+        )
 
 
 class SourceAudioProgressFile:

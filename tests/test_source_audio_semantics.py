@@ -51,13 +51,16 @@ class SourceAudioSemanticsTest(unittest.TestCase):
                 records,
             )
 
-            with patch(
-                "r1999extractor.source_audio_semantics._decode_wem",
-                side_effect=lambda payload, _media_id, _decoder: b"wav:" + payload,
-            ), patch(
-                "r1999extractor.source_audio_semantics.load_story_index_document",
-                wraps=load_story_index_document,
-            ) as load:
+            with (
+                patch(
+                    "r1999extractor.source_audio_semantics._decode_wem",
+                    side_effect=lambda payload, _media_id, _decoder: b"wav:" + payload,
+                ),
+                patch(
+                    "r1999extractor.source_audio_semantics.load_story_index_document",
+                    wraps=load_story_index_document,
+                ) as load,
+            ):
                 events = []
                 result = publish_source_audio_semantic_evidence(
                     source,
@@ -168,19 +171,29 @@ class SourceAudioSemanticsTest(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "timed.jsonl"
-            write_story_index_document(source, {"language": "en"}, [
-                _record(1, "Stop it.", 11, payload),
-                _record(2, "Stop it.", 11, payload),
-            ])
+            write_story_index_document(
+                source,
+                {"language": "en"},
+                [
+                    _record(1, "Stop it.", 11, payload),
+                    _record(2, "Stop it.", 11, payload),
+                ],
+            )
 
             def publish(name, transcriber, events):
-                with patch("r1999extractor.source_audio_semantics._decode_wem",
-                           return_value=b"wav"):
+                with patch(
+                    "r1999extractor.source_audio_semantics._decode_wem", return_value=b"wav"
+                ):
                     return publish_source_audio_semantic_evidence(
-                        source, "unused", root / f"{name}-evidence.json",
-                        root / f"{name}-story.jsonl", root / "unused-model",
-                        resolver=Resolver(), transcriber=transcriber,
-                        model_sha256="a" * 64, progress=events.append,
+                        source,
+                        "unused",
+                        root / f"{name}-evidence.json",
+                        root / f"{name}-story.jsonl",
+                        root / "unused-model",
+                        resolver=Resolver(),
+                        transcriber=transcriber,
+                        model_sha256="a" * 64,
+                        progress=events.append,
                     )
 
             def change_story(_payload):
@@ -188,8 +201,9 @@ class SourceAudioSemanticsTest(unittest.TestCase):
                 return "Stop it."
 
             events = []
-            with self.assertRaisesRegex(SourceAudioSemanticEvidenceError,
-                                        "Source story index changed"):
+            with self.assertRaisesRegex(
+                SourceAudioSemanticEvidenceError, "Source story index changed"
+            ):
                 publish("changed", change_story, events)
             self.assertFalse((root / "changed-evidence.json").exists())
             self.assertEqual(events[-1]["state"], "analyzing")
@@ -201,8 +215,10 @@ class SourceAudioSemanticsTest(unittest.TestCase):
             self.assertFalse((root / "aborted-story.jsonl").exists())
 
             events = []
-            with patch("r1999extractor.source_audio_semantics.write_story_index_document",
-                       side_effect=OSError("publication failed")):
+            with patch(
+                "r1999extractor.source_audio_semantics.write_story_index_document",
+                side_effect=OSError("publication failed"),
+            ):
                 with self.assertRaisesRegex(OSError, "publication failed"):
                     publish("failed", lambda _payload: "Stop it.", events)
             self.assertEqual(events[-1]["state"], "publishing")

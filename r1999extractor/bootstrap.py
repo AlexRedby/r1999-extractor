@@ -575,7 +575,9 @@ def main(arguments=None):
                     progress_path = options.progress_file.expanduser().resolve()
                     artifact_root = (
                         Path(options.data_directory or get_local_data_directory())
-                        .expanduser().resolve() / "reverse1999"
+                        .expanduser()
+                        .resolve()
+                        / "reverse1999"
                     )
                     if progress_path.is_relative_to(artifact_root) or (
                         options.target_story_index is not None
@@ -588,8 +590,11 @@ def main(arguments=None):
                     target_story_index=options.target_story_index,
                     narrator=options.narrator,
                     narrator_line_id=options.narrator_line_id,
-                    **({"progress": SourceAudioProgressFile(options.progress_file)}
-                       if options.progress_file is not None else {}),
+                    **(
+                        {"progress": SourceAudioProgressFile(options.progress_file)}
+                        if options.progress_file is not None
+                        else {}
+                    ),
                 )
                 print(json.dumps({"voice_manifest": str(manifest)}, sort_keys=True))
                 return 0
