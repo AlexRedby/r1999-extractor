@@ -60,7 +60,7 @@ from r1999extractor.structured_story import audit_story_like_tables
 
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
-PLAYER_VOICE_CANDIDATES_VERSION = 6
+PLAYER_VOICE_CANDIDATES_VERSION = 7
 PLAYER_VOICE_CANDIDATE_CATALOG_VERSION = 7
 DISCOVERY_LOGGER_NAME = "r1999extractor.discovery"
 

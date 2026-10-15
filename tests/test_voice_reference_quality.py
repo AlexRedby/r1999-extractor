@@ -38,8 +38,20 @@ class VoiceReferenceQualityTest(unittest.TestCase):
             result = analyze_voice_reference(path)
 
         self.assertEqual(result.duration_seconds, 2.4)
+        self.assertEqual(result.active_duration_seconds, 2.0)
         self.assertEqual(result.technical_flags, ())
         self.assertEqual(result.quality_score, 100)
+
+    def test_active_duration_counts_only_real_samples_in_partial_final_frame(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "partial.wav"
+            samples = np.concatenate((np.zeros(320), np.full(333, 0.25)))
+            write_wav(path, samples)
+
+            result = analyze_voice_reference(path)
+
+        self.assertEqual(result.active_duration_seconds, 333 / 16000)
+        self.assertEqual(result.silence_ratio, 1 / 3)
 
     def test_flags_short_quiet_silent_and_clipped_audio(self):
         with TemporaryDirectory() as temporary_directory:

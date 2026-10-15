@@ -59,7 +59,7 @@ from r1999extractor.wwise import (
 REPORT_SCHEMA = "r1999.story-voice-reference-candidates"
 REPORT_VERSION = 2
 SUPPORTED_REPORT_VERSIONS = frozenset({1, REPORT_VERSION})
-CANDIDATE_ADMISSION_POLICY_VERSION = 2
+CANDIDATE_ADMISSION_POLICY_VERSION = 3
 REFERENCE_ADMISSION_POLICIES = ("transcript-bound", "audio-only")
 
 STORY_LINE_ROUTE = "story_line_route"
@@ -642,7 +642,13 @@ def build_story_voice_candidates(
                 "reference": relative.as_posix(),
                 "reference_sha256": imported.reference_sha256,
                 "metrics": metrics_document,
-                "technical_pass": not metrics.technical_flags,
+                "technical_pass": not metrics.technical_flags
+                or (
+                    reference_admission_policy == "audio-only"
+                    and metrics.technical_flags == ("excessive-silence",)
+                    and metrics.silence_ratio <= 0.5
+                    and metrics.active_duration_seconds >= 1.5
+                ),
                 "manual_content_review_required": True,
                 "affected_character_line_count": character_affected[character],
                 "affected_portrait_line_count": portrait_affected.get((character, portrait), 0),

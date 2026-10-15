@@ -7,6 +7,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import numpy as np
+
 from r1999extractor.bootstrap import (
     PLAYER_VOICE_CANDIDATES_FIELD,
     BootstrapError,
@@ -25,12 +27,59 @@ from r1999extractor.story_voice_candidates import (
     CANDIDATE_ADMISSION_POLICY_VERSION,
     REPORT_SCHEMA,
     REPORT_VERSION,
+    build_story_voice_candidates,
     collect_story_voice_lines,
 )
 from tests.test_playable_voice import character_row, voice_row
+from tests.test_story_voice_candidates import candidate_fixture, decode_candidate, story_line
+from tests.test_voice_reference_quality import write_wav
 
 
 class BootstrapTest(unittest.TestCase):
+    def test_publishes_audio_only_paused_reference_with_retained_silence_warning(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            wav = root / "source.wav"
+            tone = 0.25 * np.sin(2 * np.pi * 220 * np.arange(12800) / 16000)
+            write_wav(wav, np.concatenate((tone, np.zeros(19200), tone)))
+            story, index, snapshots = candidate_fixture(
+                root,
+                [story_line(1, "First phrase, then another.", portrait=None)],
+                {"hero_story.bnk": {10: wav.read_bytes()}},
+            )
+            report_path, report = build_story_voice_candidates(
+                story,
+                index,
+                ["Hero"],
+                root / "candidates",
+                decoder="true",
+                bank_loader=lambda _index, bank: snapshots[bank],
+                media_decoder=decode_candidate,
+                reference_admission_policy="audio-only",
+            )
+            candidate = report["candidates"][0]
+            self.assertTrue(candidate["technical_pass"])
+            self.assertEqual(candidate["metrics"]["technical_flags"], ("excessive-silence",))
+            manifest_path = report_path.parent / "manifest.json"
+            digest = hashlib.sha256(story.read_bytes()).hexdigest()
+            _publish_player_voice_manifest(
+                report_path,
+                report,
+                manifest_path,
+                story,
+                story,
+                digest,
+                digest,
+                reference_admission_policy="audio-only",
+            )
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(len(manifest["voices"]), 1)
+            evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
+            self.assertEqual(evidence["schema_version"], 7)
+            self.assertEqual(
+                evidence["variants"][0]["reference_sha256"], candidate["reference_sha256"]
+            )
+
     def test_audio_only_publishes_text_ambiguity_but_blocks_all_identity_admission_paths(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -291,7 +340,7 @@ class BootstrapTest(unittest.TestCase):
 
         evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
         variant = evidence["variants"][0]
-        self.assertEqual(evidence["schema_version"], 6)
+        self.assertEqual(evidence["schema_version"], 7)
         self.assertEqual(len(manifest["voices"]), 1)
         self.assertEqual(
             variant["source_line_ids"],
@@ -789,7 +838,7 @@ class BootstrapTest(unittest.TestCase):
                     ],
                     "audio-only",
                 )
-                for version in (None, True, False, 6.0, "6", 5, []):
+                for version in (None, True, False, 7.0, "7", 6, []):
                     with self.subTest(cached_manifest_version=version):
                         cached_manifest = json.loads(first.read_text(encoding="utf-8"))
                         cached_evidence = cached_manifest[PLAYER_VOICE_CANDIDATES_FIELD]
@@ -807,7 +856,7 @@ class BootstrapTest(unittest.TestCase):
                             "schema_version"
                         ]
                         self.assertIs(type(refreshed_version), int)
-                        self.assertEqual(refreshed_version, 6)
+                        self.assertEqual(refreshed_version, 7)
                 with patch("r1999extractor.bootstrap.REFERENCE_DECODE_VERSION", 3):
                     new_policy = prepare_player_voice_candidates(
                         roles=("Hero",), data_directory=root
@@ -816,19 +865,27 @@ class BootstrapTest(unittest.TestCase):
                     new_catalog = prepare_player_voice_candidates(
                         roles=("Hero",), data_directory=root
                     )
+                with (
+                    patch("r1999extractor.bootstrap.CANDIDATE_ADMISSION_POLICY_VERSION", 4),
+                    patch(f"{__name__}.CANDIDATE_ADMISSION_POLICY_VERSION", 4),
+                ):
+                    new_admission = prepare_player_voice_candidates(
+                        roles=("Hero",), data_directory=root
+                    )
                 (output / "english-bank-index.json").write_text(
                     '{"rebuilt":true}', encoding="utf-8"
                 )
                 new_index = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
                 self.assertNotEqual(first, new_policy)
                 self.assertNotEqual(first, new_catalog)
+                self.assertNotEqual(first, new_admission)
                 self.assertNotEqual(first, new_index)
 
             manifest = json.loads(first.read_text(encoding="utf-8"))
             evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
 
         self.assertEqual(first, second)
-        self.assertEqual(builds, [("Hero",)] * 5)
+        self.assertEqual(builds, [("Hero",)] * 6)
         portraits.assert_any_call(
             bundles.resolve(),
             {"hero.png"},

@@ -6,6 +6,8 @@ from tempfile import TemporaryDirectory
 from threading import Barrier, Event, get_ident
 from unittest.mock import patch
 
+import numpy as np
+
 from r1999extractor.reverse1999_index import index_version
 from r1999extractor.reverse1999_voice_import import ImportedReference
 from r1999extractor.story_audio import wwise_event_id
@@ -25,6 +27,7 @@ from r1999extractor.voice_reference_quality import (
     VoiceReferenceQualityError,
 )
 from r1999extractor.wwise import AudioConversionError
+from tests.test_voice_reference_quality import write_wav
 
 
 def story_line(number, text, *, portrait="hero.png", media_id=10):
@@ -104,6 +107,7 @@ def clean_metrics(path):
     return VoiceReferenceMetrics(
         path=str(path),
         duration_seconds=3.2,
+        active_duration_seconds=2.88,
         peak_dbfs=-3.0,
         rms_dbfs=-18.0,
         silence_ratio=0.1,
@@ -170,6 +174,93 @@ def decode_candidate(data, output, media_id, _decoder, *, bank=None):
 
 
 class StoryVoiceCandidateTest(unittest.TestCase):
+    def test_audio_only_admits_bounded_internal_pauses_and_preserves_quality_gates(self):
+        sample_rate = 16000
+
+        def paused_audio(active_seconds, pause_seconds, *, amplitude=0.25, edge_seconds=0):
+            active_samples = round(active_seconds * sample_rate)
+            tone = amplitude * np.sin(2 * np.pi * 220 * np.arange(active_samples) / sample_rate)
+            midpoint = active_samples // 2 // 320 * 320
+            return np.concatenate(
+                (
+                    np.zeros(round(edge_seconds * sample_rate)),
+                    tone[:midpoint],
+                    np.zeros(round(pause_seconds * sample_rate)),
+                    tone[midpoint:],
+                )
+            )
+
+        cases = (
+            ("paused", paused_audio(1.6, 1.2), True, ("excessive-silence",)),
+            ("half-silent", paused_audio(1.5, 1.5), True, ("excessive-silence",)),
+            (
+                "mostly-silent",
+                np.concatenate((paused_audio(1.52, 1.52), np.zeros(1))),
+                False,
+                ("excessive-silence",),
+            ),
+            ("too-little-active", paused_audio(1.48, 1.48), False, ("excessive-silence",)),
+            (
+                "just-too-little-active",
+                paused_audio(1.4999375, 1.48),
+                False,
+                ("excessive-silence",),
+            ),
+            ("short", paused_audio(0.84, 0), False, ("too-short",)),
+            ("clipped", paused_audio(1.6, 1.2, amplitude=1.2), False, ("clipping",)),
+            ("quiet", paused_audio(1.6, 1.2, amplitude=0.02), False, ("too-quiet",)),
+            (
+                "leading-silence",
+                paused_audio(1.6, 0.8, edge_seconds=0.6),
+                False,
+                ("long-leading-silence",),
+            ),
+            (
+                "trailing-silence",
+                paused_audio(1.6, 0.8, edge_seconds=0.6)[::-1],
+                False,
+                ("long-trailing-silence",),
+            ),
+        )
+        for name, samples, audio_only_pass, expected_flags in cases:
+            for policy in ("transcript-bound", "audio-only"):
+                with self.subTest(clip=name, policy=policy), TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    wav = root / "source.wav"
+                    write_wav(wav, samples)
+                    story, index, snapshots = candidate_fixture(
+                        root,
+                        [story_line(1, "A phrase, then another phrase.")],
+                        {"hero_story.bnk": {10: wav.read_bytes()}},
+                    )
+                    _path, report = build_story_voice_candidates(
+                        story,
+                        index,
+                        ["Hero"],
+                        root / "candidates",
+                        decoder="true",
+                        bank_loader=lambda _index, bank: snapshots[bank],
+                        media_decoder=decode_candidate,
+                        reference_admission_policy=policy,
+                    )
+                    candidate = report["candidates"][0]
+                    admitted = audio_only_pass and policy == "audio-only"
+                    self.assertEqual(candidate["technical_pass"], admitted)
+                    self.assertEqual(
+                        report["groups"][0]["recommended_media_ids_for_audition"],
+                        [10] if admitted else [],
+                    )
+                    for flag in expected_flags:
+                        self.assertIn(flag, candidate["metrics"]["technical_flags"])
+                    self.assertLess(candidate["metrics"]["quality_score"], 100)
+                    if name == "half-silent":
+                        self.assertEqual(candidate["metrics"]["silence_ratio"], 0.5)
+                        self.assertEqual(candidate["metrics"]["active_duration_seconds"], 1.5)
+                    elif name == "mostly-silent":
+                        self.assertGreater(candidate["metrics"]["silence_ratio"], 0.5)
+                    elif name == "just-too-little-active":
+                        self.assertEqual(candidate["metrics"]["active_duration_seconds"], 1.4999375)
+
     def test_audio_only_admits_conflicting_texts_without_penalty_or_losing_provenance(self):
         for policy in ("transcript-bound", "audio-only"):
             with self.subTest(policy=policy), TemporaryDirectory() as directory:

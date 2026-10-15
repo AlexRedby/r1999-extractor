@@ -24,6 +24,7 @@ class UnusableVoiceReferenceError(VoiceReferenceQualityError):
 class VoiceReferenceMetrics:
     path: str
     duration_seconds: float
+    active_duration_seconds: float
     peak_dbfs: float
     rms_dbfs: float
     silence_ratio: float
@@ -108,6 +109,8 @@ def analyze_voice_reference(path, *, silence_dbfs=-42.0, frame_ms=20):
         if not value:
             break
         trailing_frames += 1
+    frame_lengths = np.minimum(frame_size, len(samples) - np.arange(len(silent)) * frame_size)
+    active_duration = int(np.sum(frame_lengths[~silent])) / sample_rate
     silence_ratio = float(np.mean(silent)) if len(silent) else 1.0
     clipping_ratio = float(np.mean(np.abs(samples) >= 0.995))
 
@@ -138,9 +141,10 @@ def analyze_voice_reference(path, *, silence_dbfs=-42.0, frame_ms=20):
     return VoiceReferenceMetrics(
         path=str(Path(path).expanduser().resolve()),
         duration_seconds=round(duration, 3),
+        active_duration_seconds=active_duration,
         peak_dbfs=round(_dbfs(peak), 2),
         rms_dbfs=round(_dbfs(rms), 2),
-        silence_ratio=round(silence_ratio, 4),
+        silence_ratio=silence_ratio,
         leading_silence_seconds=round(leading_frames * frame_ms / 1000, 3),
         trailing_silence_seconds=round(trailing_frames * frame_ms / 1000, 3),
         clipping_ratio=round(clipping_ratio, 6),
