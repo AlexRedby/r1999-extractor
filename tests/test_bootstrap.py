@@ -31,6 +31,80 @@ from tests.test_playable_voice import character_row, voice_row
 
 
 class BootstrapTest(unittest.TestCase):
+    def test_audio_only_publishes_text_ambiguity_but_blocks_all_identity_admission_paths(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = root / "story.jsonl"
+            story.write_text("{}\n")
+            digest = hashlib.sha256(story.read_bytes()).hexdigest()
+            candidates = []
+            for media_id in (1, 2, 3):
+                reference = root / f"{media_id}.wav"
+                reference.write_bytes(f"voice {media_id}".encode())
+                candidates.append(
+                    {
+                        "character": "Hero",
+                        "portrait": None,
+                        "source_bank": "hero.bnk",
+                        "media_id": media_id,
+                        "reference": reference.name,
+                        "reference_sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
+                        "source_lines": [
+                            {"line_id": "first", "text": "First source text."},
+                            {"line_id": "second", "text": "Conflicting source text."},
+                        ],
+                        "candidate_origin": "story_line_route",
+                        "technical_pass": True,
+                        "transcript_conflict": True,
+                        "speaker_identity_conflict": media_id != 1,
+                        "metrics": {"duration_seconds": 3.0, "quality_score": 90},
+                    }
+                )
+            report = {
+                "schema": REPORT_SCHEMA,
+                "schema_version": REPORT_VERSION,
+                "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                "reference_admission_policy": "audio-only",
+                "story_index": str(story),
+                "story_index_sha256": digest,
+                "groups": [
+                    {
+                        "character": "Hero",
+                        "portrait": None,
+                        "source_bank": "hero.bnk",
+                        "recommended_media_ids_for_audition": [2],
+                        "manual_review_media_ids_for_audition": [3],
+                    }
+                ],
+                "candidates": candidates,
+            }
+            report_path = root / "report.json"
+            report_path.write_text(json.dumps(report))
+            manifest = root / "manifest.json"
+            with self.assertRaisesRegex(BootstrapError, "reference admission policy differs"):
+                _publish_player_voice_manifest(
+                    report_path, report, manifest, story, story, digest, digest
+                )
+            _publish_player_voice_manifest(
+                report_path,
+                report,
+                manifest,
+                story,
+                story,
+                digest,
+                digest,
+                reference_admission_policy="audio-only",
+            )
+            document = json.loads(manifest.read_text())
+            evidence = document[PLAYER_VOICE_CANDIDATES_FIELD]
+            self.assertEqual(len(document["voices"]), 1)
+            self.assertEqual(evidence["reference_admission_policy"], "audio-only")
+            self.assertEqual(
+                {excerpt["text"] for excerpt in evidence["variants"][0]["source_excerpts"]},
+                {"First source text.", "Conflicting source text."},
+            )
+            self.assertEqual(json.loads(report_path.read_text()), report)
+
     def setUp(self):
         registry = patch(
             "r1999extractor.reverse1999_config._windows_registry_install_locations",
@@ -49,6 +123,7 @@ class BootstrapTest(unittest.TestCase):
                 "schema": REPORT_SCHEMA,
                 "schema_version": REPORT_VERSION,
                 "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                "reference_admission_policy": "transcript-bound",
                 "story_index": str(story),
                 "story_index_sha256": digest,
                 "groups": [],
@@ -57,8 +132,13 @@ class BootstrapTest(unittest.TestCase):
             manifest = root / "manifest.json"
             for field, values, message in (
                 (
+                    "reference_admission_policy",
+                    (None, True, "audio-only", "unknown", []),
+                    "reference admission policy differs",
+                ),
+                (
                     "admission_policy_version",
-                    (None, True, False, 1.0, "1", 2, []),
+                    (None, True, False, 2.0, "2", 1, []),
                     "admission policy is stale",
                 ),
                 (
@@ -112,6 +192,7 @@ class BootstrapTest(unittest.TestCase):
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
                     "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                    "reference_admission_policy": "transcript-bound",
                     "story_index": str(story),
                     "story_index_sha256": hashlib.sha256(story.read_bytes()).hexdigest(),
                     "outcome": "no_usable_candidates",
@@ -179,6 +260,7 @@ class BootstrapTest(unittest.TestCase):
                 "schema": REPORT_SCHEMA,
                 "schema_version": REPORT_VERSION,
                 "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                "reference_admission_policy": "transcript-bound",
                 "story_index": str(reference_index.resolve()),
                 "story_index_sha256": reference_sha256,
                 "groups": [
@@ -209,7 +291,7 @@ class BootstrapTest(unittest.TestCase):
 
         evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
         variant = evidence["variants"][0]
-        self.assertEqual(evidence["schema_version"], 5)
+        self.assertEqual(evidence["schema_version"], 6)
         self.assertEqual(len(manifest["voices"]), 1)
         self.assertEqual(
             variant["source_line_ids"],
@@ -275,6 +357,7 @@ class BootstrapTest(unittest.TestCase):
                 "schema": REPORT_SCHEMA,
                 "schema_version": REPORT_VERSION,
                 "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                "reference_admission_policy": "transcript-bound",
                 "story_index": str(reference_index.resolve()),
                 "story_index_sha256": hashlib.sha256(reference_index.read_bytes()).hexdigest(),
                 "groups": [
@@ -510,12 +593,15 @@ class BootstrapTest(unittest.TestCase):
                         "Hero",
                         "--target-story-index",
                         str(target),
+                        "--reference-admission-policy",
+                        "audio-only",
                     ]
                 ),
                 0,
             )
 
         self.assertEqual(prepare.call_args.kwargs["target_story_index"], target)
+        self.assertEqual(prepare.call_args.kwargs["reference_admission_policy"], "audio-only")
         self.assertNotIn("progress", prepare.call_args.kwargs)
 
     def test_candidate_cli_progress_keeps_final_stdout_and_protects_artifacts(self):
@@ -583,6 +669,7 @@ class BootstrapTest(unittest.TestCase):
                 *,
                 playable_speech_only=False,
                 include_unlinked_bank_media=False,
+                reference_admission_policy="transcript-bound",
                 progress=None,
             ):
                 self.assertTrue(include_unlinked_bank_media)
@@ -600,6 +687,7 @@ class BootstrapTest(unittest.TestCase):
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
                     "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                    "reference_admission_policy": reference_admission_policy,
                     "story_index": str(story.resolve()),
                     "story_index_sha256": story_digest,
                     "groups": [
@@ -620,6 +708,7 @@ class BootstrapTest(unittest.TestCase):
                             "candidate_origin": "exact_bank_unrouted_media",
                             "reference": "references/hero.wav",
                             "reference_sha256": hashlib.sha256(b"voice").hexdigest(),
+                            "speaker_identity_conflict": False,
                             "source_lines": [
                                 source_line,
                                 {"line_id": "line:Z", "source_audio_id": "play_Z"},
@@ -660,7 +749,47 @@ class BootstrapTest(unittest.TestCase):
                 self.assertEqual([event["processed"] for event in events], [0, 1, 1])
                 second = prepare_player_voice_candidates(roles=("Hero",), data_directory=root)
                 self.assertEqual(builds, [("Hero",)])
-                for version in (None, True, False, 5.0, "5", 4, []):
+                audio_only = prepare_player_voice_candidates(
+                    roles=("Hero",),
+                    data_directory=root,
+                    reference_admission_policy="audio-only",
+                )
+                self.assertNotEqual(first, audio_only)
+                audio_only_evidence = json.loads(audio_only.read_text())[
+                    PLAYER_VOICE_CANDIDATES_FIELD
+                ]
+                self.assertEqual(audio_only_evidence["reference_admission_policy"], "audio-only")
+                self.assertEqual(
+                    prepare_player_voice_candidates(roles=("Hero",), data_directory=root), first
+                )
+                self.assertEqual(
+                    prepare_player_voice_candidates(
+                        roles=("Hero",),
+                        data_directory=root,
+                        reference_admission_policy="audio-only",
+                    ),
+                    audio_only,
+                )
+                stale_audio_only = json.loads(audio_only.read_text())
+                stale_audio_only[PLAYER_VOICE_CANDIDATES_FIELD]["reference_admission_policy"] = (
+                    "transcript-bound"
+                )
+                audio_only.write_text(json.dumps(stale_audio_only))
+                self.assertEqual(
+                    prepare_player_voice_candidates(
+                        roles=("Hero",),
+                        data_directory=root,
+                        reference_admission_policy="audio-only",
+                    ),
+                    audio_only,
+                )
+                self.assertEqual(
+                    json.loads(audio_only.read_text())[PLAYER_VOICE_CANDIDATES_FIELD][
+                        "reference_admission_policy"
+                    ],
+                    "audio-only",
+                )
+                for version in (None, True, False, 6.0, "6", 5, []):
                     with self.subTest(cached_manifest_version=version):
                         cached_manifest = json.loads(first.read_text(encoding="utf-8"))
                         cached_evidence = cached_manifest[PLAYER_VOICE_CANDIDATES_FIELD]
@@ -678,12 +807,12 @@ class BootstrapTest(unittest.TestCase):
                             "schema_version"
                         ]
                         self.assertIs(type(refreshed_version), int)
-                        self.assertEqual(refreshed_version, 5)
+                        self.assertEqual(refreshed_version, 6)
                 with patch("r1999extractor.bootstrap.REFERENCE_DECODE_VERSION", 3):
                     new_policy = prepare_player_voice_candidates(
                         roles=("Hero",), data_directory=root
                     )
-                with patch("r1999extractor.bootstrap.PLAYER_VOICE_CANDIDATE_CATALOG_VERSION", 7):
+                with patch("r1999extractor.bootstrap.PLAYER_VOICE_CANDIDATE_CATALOG_VERSION", 8):
                     new_catalog = prepare_player_voice_candidates(
                         roles=("Hero",), data_directory=root
                     )
@@ -699,7 +828,7 @@ class BootstrapTest(unittest.TestCase):
             evidence = manifest[PLAYER_VOICE_CANDIDATES_FIELD]
 
         self.assertEqual(first, second)
-        self.assertEqual(builds, [("Hero",)] * 4)
+        self.assertEqual(builds, [("Hero",)] * 5)
         portraits.assert_any_call(
             bundles.resolve(),
             {"hero.png"},
@@ -708,6 +837,7 @@ class BootstrapTest(unittest.TestCase):
         )
         self.assertEqual(len(manifest["voices"]), 1)
         self.assertEqual(evidence["story_index_sha256"], story_digest)
+        self.assertEqual(evidence["reference_admission_policy"], "transcript-bound")
         self.assertEqual(
             evidence["variants"][0]["source_voice_ids"],
             ["play_a", "play_hero_7", "play_Z"],
@@ -762,6 +892,7 @@ class BootstrapTest(unittest.TestCase):
                 *,
                 playable_speech_only=False,
                 include_unlinked_bank_media=False,
+                reference_admission_policy="transcript-bound",
             ):
                 self.assertTrue(include_unlinked_bank_media)
                 self.assertTrue(playable_speech_only)
@@ -775,6 +906,7 @@ class BootstrapTest(unittest.TestCase):
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
                     "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                    "reference_admission_policy": "transcript-bound",
                     "story_index": str(Path(source).resolve()),
                     "story_index_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest(),
                     "groups": [
@@ -871,6 +1003,7 @@ class BootstrapTest(unittest.TestCase):
                 *,
                 playable_speech_only=False,
                 include_unlinked_bank_media=False,
+                reference_admission_policy="transcript-bound",
             ):
                 self.assertTrue(include_unlinked_bank_media)
                 self.assertTrue(playable_speech_only)
@@ -879,6 +1012,7 @@ class BootstrapTest(unittest.TestCase):
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
                     "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                    "reference_admission_policy": "transcript-bound",
                     "story_index": str(Path(source).resolve()),
                     "story_index_sha256": "0" * 64,
                     "groups": [],
@@ -910,6 +1044,7 @@ class BootstrapTest(unittest.TestCase):
                 *,
                 playable_speech_only=False,
                 include_unlinked_bank_media=False,
+                reference_admission_policy="transcript-bound",
             ):
                 self.assertTrue(include_unlinked_bank_media)
                 self.assertTrue(playable_speech_only)
@@ -919,6 +1054,7 @@ class BootstrapTest(unittest.TestCase):
                     "schema": REPORT_SCHEMA,
                     "schema_version": REPORT_VERSION,
                     "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                    "reference_admission_policy": "transcript-bound",
                     "story_index": str(Path(source).resolve()),
                     "story_index_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest(),
                     "groups": [],

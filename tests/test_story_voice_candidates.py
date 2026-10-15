@@ -170,6 +170,106 @@ def decode_candidate(data, output, media_id, _decoder, *, bank=None):
 
 
 class StoryVoiceCandidateTest(unittest.TestCase):
+    def test_audio_only_admits_conflicting_texts_without_penalty_or_losing_provenance(self):
+        for policy in ("transcript-bound", "audio-only"):
+            with self.subTest(policy=policy), TemporaryDirectory() as directory:
+                root = Path(directory)
+                lines = [
+                    story_line(1, "First source text.", media_id=10),
+                    {
+                        **story_line(2, "Different source text.", media_id=20),
+                        "source_event": "play_second",
+                    },
+                    {
+                        **story_line(3, "Clean control.", media_id=30),
+                        "source_event": "play_control",
+                    },
+                ]
+                story, index, snapshots = candidate_fixture(
+                    root,
+                    lines,
+                    {"hero_story.bnk": {10: b"same", 20: b"same", 30: b"clean"}},
+                )
+                _path, report = build_story_voice_candidates(
+                    story,
+                    index,
+                    ["Hero"],
+                    root / "candidates",
+                    decoder="true",
+                    bank_loader=lambda _index, bank: snapshots[bank],
+                    media_decoder=decode_candidate,
+                    analyzer=clean_metrics,
+                    reference_admission_policy=policy,
+                )
+                self.assertEqual(report["reference_admission_policy"], policy)
+                self.assertEqual(
+                    report["groups"][0]["recommended_media_ids_for_audition"],
+                    [10, 20, 30] if policy == "audio-only" else [30],
+                )
+                for candidate in report["candidates"][:2]:
+                    self.assertTrue(candidate["transcript_conflict"])
+                    self.assertFalse(candidate["speaker_identity_conflict"])
+                    self.assertEqual(len(candidate["source_lines"]), 1)
+                    self.assertEqual(
+                        {line["text"] for line in candidate["reference_source_lines"]},
+                        {"First source text.", "Different source text."},
+                    )
+
+    def test_audio_only_rejects_known_route_owners_and_decoded_speaker_ambiguity(self):
+        for conflict in ("unrequested-character", "portrait", "cross-bank-decoded"):
+            with self.subTest(conflict=conflict), TemporaryDirectory() as directory:
+                root = Path(directory)
+                second = story_line(2, "Same text.")
+                roles = ["Hero"]
+                media = {"hero_story.bnk": {10: b"same"}}
+                if conflict == "portrait":
+                    second["portrait"] = "other.png"
+                else:
+                    second["voice_character"] = "Other"
+                    second["speaker"] = "Other"
+                if conflict == "cross-bank-decoded":
+                    second["source_bank"] = "other_story.bnk"
+                    second["source_media_ids"] = [20]
+                    media["other_story.bnk"] = {20: b"same"}
+                    roles.append("Other")
+                story, index, snapshots = candidate_fixture(
+                    root, [story_line(1, "Same text."), second], media
+                )
+                _path, report = build_story_voice_candidates(
+                    story,
+                    index,
+                    roles,
+                    root / "candidates",
+                    decoder="true",
+                    bank_loader=lambda _index, bank: snapshots[bank],
+                    media_decoder=decode_candidate,
+                    analyzer=clean_metrics,
+                    reference_admission_policy="audio-only",
+                )
+                self.assertTrue(all(c["speaker_identity_conflict"] for c in report["candidates"]))
+                self.assertFalse(any(c["transcript_conflict"] for c in report["candidates"]))
+                self.assertFalse(
+                    any(group["recommended_media_ids_for_audition"] for group in report["groups"])
+                )
+                if conflict == "unrequested-character":
+                    self.assertEqual(report["candidate_count"], 1)
+
+    def test_audio_only_manual_too_long_admission_still_requires_one_speaker(self):
+        candidate = {
+            "source_bank": "hero3146_mainvoc.bnk",
+            "source_lines": [{"line_id": "playable-voice:3146:1314605:4"}],
+            "metrics": {"technical_flags": ["too-long"]},
+            "transcript_conflict": True,
+            "speaker_identity_conflict": False,
+        }
+        self.assertFalse(is_manual_playable_too_long_candidate(candidate))
+        self.assertTrue(is_manual_playable_too_long_candidate(candidate, "audio-only"))
+        self.assertFalse(
+            is_manual_playable_too_long_candidate(
+                {**candidate, "speaker_identity_conflict": True}, "audio-only"
+            )
+        )
+
     def test_inventory_captures_coverage_and_other_bank_owners_in_one_json_pass(self):
         with TemporaryDirectory() as directory:
             story = write_story(
@@ -189,8 +289,8 @@ class StoryVoiceCandidateTest(unittest.TestCase):
             with patch(
                 "r1999extractor.story_voice_candidates.json.loads", wraps=json.loads
             ) as loads:
-                lines, digest, characters, portraits, owners = _collect_story_voice_inventory(
-                    story, iter(["Hero"])
+                lines, digest, characters, portraits, owners, media_owners = (
+                    _collect_story_voice_inventory(story, iter(["Hero"]))
                 )
             self.assertEqual([call.args[0] for call in loads.call_args_list], expected_rows)
             self.assertEqual(digest, hashlib.sha256(story.read_bytes()).hexdigest())
@@ -199,6 +299,10 @@ class StoryVoiceCandidateTest(unittest.TestCase):
             self.assertEqual(characters, {"Hero": 1})
             self.assertEqual(
                 owners, {"hero_story.bnk": {("hero", "hero.png"), ("other", "hero.png")}}
+            )
+            self.assertEqual(
+                media_owners,
+                {("hero_story.bnk", 10): {("hero", "hero.png"), ("other", "hero.png")}},
             )
 
     def test_concurrent_preparation_limits_consumption_to_four_batches_of_eight(self):

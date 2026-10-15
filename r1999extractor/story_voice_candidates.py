@@ -59,7 +59,8 @@ from r1999extractor.wwise import (
 REPORT_SCHEMA = "r1999.story-voice-reference-candidates"
 REPORT_VERSION = 2
 SUPPORTED_REPORT_VERSIONS = frozenset({1, REPORT_VERSION})
-CANDIDATE_ADMISSION_POLICY_VERSION = 1
+CANDIDATE_ADMISSION_POLICY_VERSION = 2
+REFERENCE_ADMISSION_POLICIES = ("transcript-bound", "audio-only")
 
 STORY_LINE_ROUTE = "story_line_route"
 EXACT_BANK_UNROUTED_MEDIA = "exact_bank_unrouted_media"
@@ -131,6 +132,7 @@ def _collect_story_voice_inventory(story_index, roles):
     character_counts = {role: 0 for role in requested.values()}
     portrait_counts = {}
     bank_identities = {}
+    media_identities = {}
     try:
         decoded = payload.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -155,6 +157,11 @@ def _collect_story_voice_inventory(story_index, roles):
         bank = str(record.get("source_bank") or "").strip()
         if available and bank and character:
             bank_identities.setdefault(bank, set()).add((key, portrait))
+            media_ids = record.get("source_media_ids")
+            if isinstance(media_ids, list):
+                for media_id in media_ids:
+                    if type(media_id) is int and media_id >= 0:
+                        media_identities.setdefault((bank, media_id), set()).add((key, portrait))
         role = requested.get(key)
         if role is not None and record.get("speakable") is not False and not available:
             character_counts[role] += 1
@@ -231,6 +238,7 @@ def _collect_story_voice_inventory(story_index, roles):
         character_counts,
         portrait_counts,
         bank_identities,
+        media_identities,
     )
 
 
@@ -242,12 +250,19 @@ def is_playable_main_voice_reference(line_id, source_bank):
     return bank.startswith("mianvoc_hero") or bank.endswith("_mainvoc")
 
 
-def is_manual_playable_too_long_candidate(candidate):
+def reference_identity_is_admissible(candidate, reference_admission_policy="transcript-bound"):
+    """Separate text provenance from the speaker identity required by audio-only cloning."""
+    if reference_admission_policy == "audio-only":
+        return candidate.get("speaker_identity_conflict") is False
+    return candidate.get("transcript_conflict") is False
+
+
+def is_manual_playable_too_long_candidate(candidate, reference_admission_policy="transcript-bound"):
     """Return whether a playable main-voice clip is safe for manual audition only."""
     source_lines = candidate.get("source_lines")
     metrics = candidate.get("metrics")
     return (
-        candidate.get("transcript_conflict") is False
+        reference_identity_is_admissible(candidate, reference_admission_policy)
         and isinstance(source_lines, list)
         and bool(source_lines)
         and isinstance(metrics, dict)
@@ -364,14 +379,22 @@ def build_story_voice_candidates(
     include_all_bank_media=False,
     include_unlinked_bank_media=False,
     playable_speech_only=False,
+    reference_admission_policy="transcript-bound",
     progress: SourceAudioProgressCallback | None = None,
 ):
     """Publish a non-authoritative audition set without changing a voice manifest."""
+    if reference_admission_policy not in REFERENCE_ADMISSION_POLICIES:
+        raise StoryVoiceCandidateError("Unknown reference admission policy")
     story_index = resolve_story_index_path(story_index)
     bank_index_path = Path(bank_index_path).expanduser().resolve()
-    lines, story_sha256, character_affected, portrait_affected, bank_identities = (
-        _collect_story_voice_inventory(story_index, roles)
-    )
+    (
+        lines,
+        story_sha256,
+        character_affected,
+        portrait_affected,
+        bank_identities,
+        media_identities,
+    ) = _collect_story_voice_inventory(story_index, roles)
     if playable_speech_only:
         lines = tuple(
             line
@@ -688,6 +711,15 @@ def build_story_voice_candidates(
         for candidate in candidates:
             by_reference.setdefault(candidate["reference_sha256"], []).append(candidate)
         for same_audio in by_reference.values():
+            speaker_identities = {
+                (normalize_character_name(candidate["character"]), candidate["portrait"])
+                for candidate in same_audio
+            }
+            for candidate in same_audio:
+                speaker_identities.update(
+                    media_identities.get((candidate["source_bank"], candidate["media_id"]), ())
+                )
+            speaker_identity_conflict = len(speaker_identities) > 1
             source_lines = {
                 (line["line_id"], line["text_sha256"]): line
                 for candidate in same_audio
@@ -698,6 +730,7 @@ def build_story_voice_candidates(
             for candidate in same_audio:
                 candidate["reference_source_lines"] = associations
                 candidate["transcript_conflict"] = transcript_conflict
+                candidate["speaker_identity_conflict"] = speaker_identity_conflict
 
         groups = []
         group_keys = sorted(
@@ -715,7 +748,7 @@ def build_story_voice_candidates(
                 members,
                 key=lambda value: (
                     not value["technical_pass"],
-                    value["transcript_conflict"],
+                    not reference_identity_is_admissible(value, reference_admission_policy),
                     -value["metrics"]["quality_score"],
                     abs(value["metrics"]["duration_seconds"] - 4.0),
                     value["media_id"],
@@ -730,12 +763,13 @@ def build_story_voice_candidates(
                     "recommended_media_ids_for_audition": [
                         value["media_id"]
                         for value in ranked
-                        if value["technical_pass"] and not value["transcript_conflict"]
+                        if value["technical_pass"]
+                        and reference_identity_is_admissible(value, reference_admission_policy)
                     ][:3],
                     "manual_review_media_ids_for_audition": [
                         value["media_id"]
                         for value in ranked
-                        if is_manual_playable_too_long_candidate(value)
+                        if is_manual_playable_too_long_candidate(value, reference_admission_policy)
                     ],
                     "manual_content_review_required": True,
                     "affected_character_line_count": character_affected[character],
@@ -746,6 +780,7 @@ def build_story_voice_candidates(
             "schema": REPORT_SCHEMA,
             "schema_version": REPORT_VERSION,
             "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+            "reference_admission_policy": reference_admission_policy,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "story_index": str(story_index),
             "story_index_sha256": story_sha256,
@@ -754,6 +789,7 @@ def build_story_voice_candidates(
             "roles": sorted({line.character for line in lines}, key=str.casefold),
             "source_line_count": len(lines),
             "transcript_evidence_scope": "requested_roles",
+            "speaker_identity_evidence_scope": "all_index_routes_and_requested_role_audio",
             "group_count": len(groups),
             "candidate_count": len(candidates),
             "rejected_candidate_count": len(rejected_candidates),
@@ -841,6 +877,11 @@ def create_parser():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--decoder", default="vgmstream-cli")
     parser.add_argument(
+        "--reference-admission-policy",
+        choices=REFERENCE_ADMISSION_POLICIES,
+        default="transcript-bound",
+    )
+    parser.add_argument(
         "--include-all-bank-media",
         action="store_true",
         help=(
@@ -861,6 +902,7 @@ def main(arguments=None):
             options.output,
             decoder=options.decoder,
             include_all_bank_media=options.include_all_bank_media,
+            reference_admission_policy=options.reference_admission_policy,
         )
     except (
         AudioConversionError,

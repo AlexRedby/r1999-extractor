@@ -50,16 +50,18 @@ from r1999extractor.story_index import (
 from r1999extractor.story_portraits import StoryPortraitError, extract_story_portraits
 from r1999extractor.story_voice_candidates import (
     CANDIDATE_ADMISSION_POLICY_VERSION,
+    REFERENCE_ADMISSION_POLICIES,
     REPORT_SCHEMA,
     SUPPORTED_REPORT_VERSIONS,
     build_story_voice_candidates,
+    reference_identity_is_admissible,
 )
 from r1999extractor.structured_story import audit_story_like_tables
 
 PLAYER_VOICE_CANDIDATES_FIELD = "vntts.player.voice_candidates"
 PLAYER_VOICE_CANDIDATES_SCHEMA = "vntts.player-voice-candidates"
-PLAYER_VOICE_CANDIDATES_VERSION = 5
-PLAYER_VOICE_CANDIDATE_CATALOG_VERSION = 6
+PLAYER_VOICE_CANDIDATES_VERSION = 6
+PLAYER_VOICE_CANDIDATE_CATALOG_VERSION = 7
 DISCOVERY_LOGGER_NAME = "r1999extractor.discovery"
 
 
@@ -93,9 +95,12 @@ def prepare_player_voice_candidates(
     target_story_index=None,
     narrator=False,
     narrator_line_id=None,
+    reference_admission_policy="transcript-bound",
     progress: SourceAudioProgressCallback | None = None,
 ):
     """Build or reuse safe, selected-role candidates for the player workflow."""
+    if reference_admission_policy not in REFERENCE_ADMISSION_POLICIES:
+        raise BootstrapError("Unknown reference admission policy")
     roles = tuple(
         sorted(
             {str(role).strip() for role in roles if str(role).strip()},
@@ -148,6 +153,8 @@ def prepare_player_voice_candidates(
                 "reference_decode_version": REFERENCE_DECODE_VERSION,
                 "unlinked_bank_media_policy_version": 2,
                 "candidate_catalog_version": PLAYER_VOICE_CANDIDATE_CATALOG_VERSION,
+                "admission_policy_version": CANDIDATE_ADMISSION_POLICY_VERSION,
+                "reference_admission_policy": reference_admission_policy,
                 "bank_index_sha256": sha256_file(bank_index),
                 "roles": [normalize_character_name(role) for role in roles],
             },
@@ -166,6 +173,7 @@ def prepare_player_voice_candidates(
                 evidence.get("story_index_sha256") == target_story_sha256
                 and type(evidence.get("schema_version")) is int
                 and evidence.get("schema_version") == PLAYER_VOICE_CANDIDATES_VERSION
+                and evidence.get("reference_admission_policy") == reference_admission_policy
             ):
                 return manifest_path
         except (OSError, RuntimeError, ValueError):
@@ -181,6 +189,7 @@ def prepare_player_voice_candidates(
                 directory,
                 playable_speech_only=use_playable_speech_only,
                 include_unlinked_bank_media=True,
+                reference_admission_policy=reference_admission_policy,
                 **({"progress": progress} if progress is not None else {}),
             )
         return _publish_player_voice_manifest(
@@ -191,6 +200,7 @@ def prepare_player_voice_candidates(
             target_story_index,
             reference_story_sha256,
             target_story_sha256,
+            reference_admission_policy=reference_admission_policy,
             progress=progress,
         )
     except (OSError, RuntimeError, ValueError) as error:
@@ -206,6 +216,7 @@ def _publish_player_voice_manifest(
     reference_story_sha256,
     target_story_sha256,
     *,
+    reference_admission_policy="transcript-bound",
     progress: SourceAudioProgressCallback | None = None,
 ):
     reference_story_index = Path(reference_story_index).resolve()
@@ -221,6 +232,11 @@ def _publish_player_voice_manifest(
         or sha256_file(target_story_index) != target_story_sha256
     ):
         raise BootstrapError("Voice candidate report story index changed")
+    if (
+        reference_admission_policy not in REFERENCE_ADMISSION_POLICIES
+        or report.get("reference_admission_policy") != reference_admission_policy
+    ):
+        raise BootstrapError("Voice candidate report reference admission policy differs")
     if (
         type(report.get("admission_policy_version")) is not int
         or report.get("admission_policy_version") != CANDIDATE_ADMISSION_POLICY_VERSION
@@ -258,10 +274,22 @@ def _publish_player_voice_manifest(
         for candidate in report.get("candidates", ())
         if isinstance(candidate, dict)
         and candidate.get("technical_pass") is True
-        and candidate.get("transcript_conflict") is False
+        and reference_identity_is_admissible(candidate, reference_admission_policy)
         and candidate.get("candidate_origin") == "story_line_route"
     }
     published = recommended | clean | manual_review
+    if reference_admission_policy == "audio-only":
+        published &= {
+            (
+                candidate.get("character"),
+                candidate.get("portrait"),
+                candidate.get("source_bank"),
+                candidate.get("media_id"),
+            )
+            for candidate in report.get("candidates", ())
+            if isinstance(candidate, dict)
+            and reference_identity_is_admissible(candidate, reference_admission_policy)
+        }
     portrait_hashes = _prepare_player_portraits(
         reference_story_index,
         {
@@ -383,6 +411,7 @@ def _publish_player_voice_manifest(
         PLAYER_VOICE_CANDIDATES_FIELD: {
             "schema": PLAYER_VOICE_CANDIDATES_SCHEMA,
             "schema_version": PLAYER_VOICE_CANDIDATES_VERSION,
+            "reference_admission_policy": reference_admission_policy,
             "story_index_sha256": target_story_sha256,
             "candidate_report": report_path.name,
             "candidate_report_sha256": report_sha256,
@@ -569,6 +598,11 @@ def create_parser():
     parser.add_argument("--narrator", action="store_true")
     parser.add_argument("--narrator-line-id")
     parser.add_argument("--voice-candidate-role", action="append", default=[])
+    parser.add_argument(
+        "--reference-admission-policy",
+        choices=REFERENCE_ADMISSION_POLICIES,
+        default="transcript-bound",
+    )
     parser.add_argument("--progress-file", type=Path)
     return parser
 
@@ -602,6 +636,7 @@ def main(arguments=None):
                     target_story_index=options.target_story_index,
                     narrator=options.narrator,
                     narrator_line_id=options.narrator_line_id,
+                    reference_admission_policy=options.reference_admission_policy,
                     **(
                         {"progress": SourceAudioProgressFile(options.progress_file)}
                         if options.progress_file is not None
