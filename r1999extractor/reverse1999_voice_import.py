@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import logging
+import subprocess
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -334,11 +335,64 @@ def decode_reference_data(data, output, media_id, decoder, *, bank=None, runner=
             overwrite=True,
             **({"runner": runner} if runner is not None else {}),
         )
-        with wave.open(str(decoded_output), "rb") as wav:
-            decoded_duration = wav.getnframes() / wav.getframerate()
-        trim_and_normalize_voice_reference(decoded_output, output)
-        with wave.open(str(output), "rb") as wav:
-            reference_duration = wav.getnframes() / wav.getframerate()
+        return _finalize_reference(data, decoded_output, output, media_id, bank)
+
+
+def decode_reference_batch(references, decoder, *, runner=None):
+    """Decode up to eight (bytes, fresh output, media ID, bank) references together.
+
+    The caller owns its output staging directory and cleanup on failure.
+    """
+    if not references or len(references) > 8:
+        raise GameVoiceImportError("A reference batch must contain one to eight items")
+    checked = []
+    for data, output, media_id, bank in references:
+        if not isinstance(data, bytes) or not data:
+            raise GameVoiceImportError(f"Media {media_id} contains no bytes")
+        output = Path(output).expanduser()
+        if output.is_symlink() or output.exists():
+            raise GameVoiceImportError(f"Reference batch output already exists: {output}")
+        checked.append((data, output.resolve(), media_id, bank))
+    if len({str(item[1]).casefold() for item in checked}) != len(checked):
+        raise GameVoiceImportError("Reference batch outputs must have independent paths")
+    with TemporaryDirectory(prefix="r1999-game-voice-") as temporary_directory:
+        sources = []
+        for index, (data, _output, _media_id, _bank) in enumerate(checked):
+            source = Path(temporary_directory) / f"{index}.wem"
+            source.write_bytes(data)
+            sources.append(source)
+        result = (runner or subprocess.run)(
+            [resolve_decoder(decoder), "-i", *(str(source) for source in sources)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode:
+            raise AudioConversionError(
+                "Unable to convert reference batch: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        decoded_outputs = [Path(str(source) + ".wav") for source in sources]
+        # vgmstream can return zero even when an individual output was not written.
+        for decoded in decoded_outputs:
+            if not decoded.is_file():
+                raise AudioConversionError(f"Decoder did not create output: {decoded}")
+            try:
+                with wave.open(str(decoded), "rb"):
+                    pass
+            except (OSError, EOFError, wave.Error) as error:
+                raise AudioConversionError(f"Decoder created an invalid WAV: {decoded}") from error
+        return [
+            _finalize_reference(data, decoded, output, media_id, bank)
+            for (data, output, media_id, bank), decoded in zip(checked, decoded_outputs)
+        ]
+
+
+def _finalize_reference(data, decoded_output, output, media_id, bank):
+    with wave.open(str(decoded_output), "rb") as wav:
+        decoded_duration = wav.getnframes() / wav.getframerate()
+    trim_and_normalize_voice_reference(decoded_output, output)
+    with wave.open(str(output), "rb") as wav:
+        reference_duration = wav.getnframes() / wav.getframerate()
     return ImportedReference(
         path=output,
         media_id=media_id,

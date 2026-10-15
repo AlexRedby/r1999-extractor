@@ -8,8 +8,7 @@ import json
 import shutil
 import sys
 import tempfile
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from itertools import islice
@@ -30,6 +29,7 @@ from r1999extractor.reverse1999_index import default_output as default_bank_inde
 from r1999extractor.reverse1999_voice_import import (
     REFERENCE_DECODE_VERSION,
     GameVoiceImportError,
+    decode_reference_batch,
     decode_reference_data,
 )
 from r1999extractor.source_audio_progress import (
@@ -530,7 +530,7 @@ def build_story_voice_candidates(
             )
             return Path("references") / group_slug / f"{group_slug}.wav"
 
-        def prepare_reference(item):
+        def reference_source(item):
             (character, portrait, bank, media_id), source_lines, relative = item
             source_modes = {
                 media_id in resolutions[line.line_id].streamed_media_ids
@@ -562,6 +562,11 @@ def build_story_voice_candidates(
                     ) from error
             else:
                 payload = snapshot.media[media_id]
+            return payload, event_ids
+
+        def prepare_reference(item):
+            (_character, _portrait, bank, media_id), _source_lines, relative = item
+            payload, event_ids = reference_source(item)
             imported = media_decoder(
                 payload,
                 staging / relative,
@@ -569,6 +574,10 @@ def build_story_voice_candidates(
                 decoder,
                 bank=bank,
             )
+            return candidate_record(item, imported, event_ids)
+
+        def candidate_record(item, imported, event_ids):
+            (character, portrait, bank, media_id), source_lines, relative = item
             metrics = analyzer(imported.path)
             metrics_document = asdict(metrics)
             metrics_document["path"] = relative.as_posix()
@@ -578,7 +587,7 @@ def build_story_voice_candidates(
                 "character": character,
                 "portrait": portrait,
                 "source_bank": bank,
-                "source_bank_sha256": snapshot.sha256,
+                "source_bank_sha256": snapshots[bank].sha256,
                 "media_id": media_id,
                 "source_sha256": imported.source_sha256,
                 "reference_decode_version": REFERENCE_DECODE_VERSION,
@@ -595,6 +604,20 @@ def build_story_voice_candidates(
                 "affected_portrait_line_count": portrait_affected.get((character, portrait), 0),
             }
 
+        def prepare_batch(batch):
+            sources = [reference_source(item) for item in batch]
+            imported = decode_reference_batch(
+                [
+                    (payload, staging / item[2], item[0][3], item[0][2])
+                    for item, (payload, _event_ids) in zip(batch, sources)
+                ],
+                decoder,
+            )
+            return [
+                candidate_record(item, reference, event_ids)
+                for item, reference, (_payload, event_ids) in zip(batch, imported, sources)
+            ]
+
         items = [
             (identity, source_lines, reference_path(identity))
             for identity, source_lines in sorted(
@@ -602,22 +625,32 @@ def build_story_voice_candidates(
                 key=lambda value: tuple(str(part or "").casefold() for part in value[0]),
             )
         ]
+        candidate_order = {item[0]: index for index, item in enumerate(items)}
         independent_paths = len({item[2].as_posix().casefold() for item in items}) == len(items)
         if (
             media_decoder is decode_reference_data
             and analyzer is analyze_voice_reference
             and independent_paths
         ):
-            prepared = _prepare_references_concurrently(prepare_reference, items)
+            batches = (items[offset : offset + 8] for offset in range(0, len(items), 8))
+            prepared = _prepare_references_concurrently(prepare_batch, batches)
         else:
-            prepared = map(prepare_reference, items)
+            prepared = ((prepare_reference(item),) for item in items)
         try:
-            for candidate in prepared:
-                candidates.append(candidate)
-                report_source_audio_progress(progress, "references", len(candidates), len(grouped))
+            for batch in prepared:
+                for candidate in batch:
+                    candidates.append(candidate)
+                    report_source_audio_progress(
+                        progress, "references", len(candidates), len(grouped)
+                    )
         finally:
             if hasattr(prepared, "close"):
                 prepared.close()
+        candidates.sort(
+            key=lambda value: candidate_order[
+                (value["character"], value["portrait"], value["source_bank"], value["media_id"])
+            ]
+        )
 
         groups = []
         group_keys = sorted(
@@ -722,12 +755,15 @@ def build_story_voice_candidates(
 def _prepare_references_concurrently(prepare, items):
     items = iter(items)
     with ThreadPoolExecutor(max_workers=4) as workers:
-        pending = deque(workers.submit(prepare, item) for item in islice(items, 4))
+        pending = {workers.submit(prepare, item) for item in islice(items, 4)}
         try:
             while pending:
-                yield pending.popleft().result()
-                if (item := next(items, None)) is not None:
-                    pending.append(workers.submit(prepare, item))
+                completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in completed:
+                    pending.remove(future)
+                    yield future.result()
+                    if (item := next(items, None)) is not None:
+                        pending.add(workers.submit(prepare, item))
         finally:
             for future in pending:
                 future.cancel()

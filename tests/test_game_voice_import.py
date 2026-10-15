@@ -2,11 +2,14 @@ import json
 import struct
 import unittest
 import wave
+from dataclasses import replace
 from pathlib import Path
+from subprocess import CompletedProcess
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from r1999extractor import reverse1999_voice_import as importer
+from r1999extractor.voice_reference_quality import analyze_voice_reference
 from r1999extractor.wwise import EmbeddedMedia, WwiseBankSummary
 
 
@@ -384,6 +387,107 @@ class Reverse1999GameVoiceImportTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual(manifest["voices"][0]["aliases"], ["Slouch Hat"])
+
+
+class ReferenceBatchDecodeTest(unittest.TestCase):
+    def test_batch_matches_single_decode_bytes_metadata_and_quality(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            references = [
+                (b"first media", root / "batch/first.wav", 10, "first.bnk"),
+                (b"second media", root / "batch/second.wav", 10, "second.bnk"),
+            ]
+            sources = []
+
+            def batch_runner(arguments, *, capture_output, text):
+                self.assertTrue(capture_output and text)
+                self.assertEqual(arguments[:2], ["/decoder", "-i"])
+                sources.extend(Path(value) for value in arguments[2:])
+                self.assertEqual([path.name for path in sources], ["0.wem", "1.wem"])
+                self.assertEqual(
+                    [path.read_bytes() for path in sources], [b"first media", b"second media"]
+                )
+                self.assertTrue(all(path.is_absolute() for path in sources))
+                for source in sources:
+                    write_wav(str(source) + ".wav")
+                return CompletedProcess(arguments, 0, "", "")
+
+            def single_runner(arguments, *, capture_output, text):
+                self.assertTrue(capture_output and text)
+                self.assertEqual(arguments[1:3], ["-i", "-o"])
+                write_wav(arguments[3])
+                return CompletedProcess(arguments, 0, "", "")
+
+            with patch.object(importer, "resolve_decoder", return_value="/decoder"):
+                batch = importer.decode_reference_batch(references, "decoder", runner=batch_runner)
+            for number, ((data, _output, media_id, bank), reference) in enumerate(
+                zip(references, batch)
+            ):
+                single = importer.decode_reference_data(
+                    data,
+                    root / f"single/{number}.wav",
+                    media_id,
+                    "true",
+                    bank=bank,
+                    runner=single_runner,
+                )
+                self.assertEqual(replace(reference, path=single.path), single)
+                self.assertEqual(reference.path.read_bytes(), single.path.read_bytes())
+                self.assertEqual(
+                    replace(analyze_voice_reference(reference.path), path=str(single.path)),
+                    analyze_voice_reference(single.path),
+                )
+            self.assertTrue(all(not source.parent.exists() for source in sources))
+
+    def test_missing_output_with_zero_exit_and_invalid_wav_clean_up_temporary_inputs(self):
+        for failure in ("missing", "invalid", "exit"):
+            with self.subTest(failure=failure), TemporaryDirectory() as directory:
+                root = Path(directory)
+                sources = []
+
+                def runner(arguments, **_options):
+                    sources.extend(Path(value) for value in arguments[2:])
+                    write_wav(str(sources[0]) + ".wav")
+                    if failure == "invalid":
+                        Path(str(sources[1]) + ".wav").write_bytes(b"invalid WAV")
+                    return CompletedProcess(arguments, int(failure == "exit"), "", "decoder failed")
+
+                with self.assertRaises(importer.AudioConversionError):
+                    importer.decode_reference_batch(
+                        [(b"a", root / "a.wav", 1, None), (b"b", root / "b.wav", 2, None)],
+                        "true",
+                        runner=runner,
+                    )
+                self.assertTrue(sources)
+                self.assertTrue(all(not source.parent.exists() for source in sources))
+                self.assertFalse((root / "a.wav").exists())
+                self.assertFalse((root / "b.wav").exists())
+
+    def test_batch_rejects_aliased_or_existing_outputs_and_invalid_size_before_decoding(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "existing.wav"
+            existing.write_bytes(b"keep existing")
+            symlink = root / "link.wav"
+            symlink.symlink_to(root / "missing.wav")
+            for outputs in (
+                [root / "same.wav", root / "nested/../same.wav"],
+                [root / "same.wav", root / "SAME.wav"],
+                [existing],
+                [symlink],
+                [],
+                [root / f"{number}.wav" for number in range(9)],
+            ):
+                with (
+                    self.subTest(outputs=outputs),
+                    patch.object(importer.subprocess, "run") as runner,
+                ):
+                    with self.assertRaises(importer.GameVoiceImportError):
+                        importer.decode_reference_batch(
+                            [(b"media", output, 10, None) for output in outputs], "true"
+                        )
+                    runner.assert_not_called()
+            self.assertEqual(existing.read_bytes(), b"keep existing")
 
 
 def write_wav(path):

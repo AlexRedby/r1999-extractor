@@ -142,26 +142,56 @@ class StoryVoiceCandidateTest(unittest.TestCase):
                 owners, {"hero_story.bnk": {("hero", "hero.png"), ("other", "hero.png")}}
             )
 
-    def test_concurrent_preparation_is_bounded_and_returns_sorted_order(self):
-        started = [Event() for _ in range(4)]
+    def test_concurrent_preparation_limits_consumption_to_four_batches_of_eight(self):
+        started = Barrier(4)
+        release = Event()
         consumed = []
 
         def items():
             for number in range(12):
-                consumed.append(number)
-                yield number
+                batch = tuple(range(number * 8, (number + 1) * 8))
+                consumed.extend(batch)
+                yield batch
 
-        def prepare(number):
+        def prepare(batch):
+            number = batch[0] // 8
             if number < 4:
-                started[number].set()
-            if number == 0:
-                self.assertTrue(started[3].wait(3))
-            return number
+                started.wait(timeout=3)
+                if number != 1:
+                    self.assertTrue(release.wait(3))
+            return batch
 
         prepared = _prepare_references_concurrently(prepare, items())
-        self.assertEqual(next(prepared), 0)
-        self.assertEqual(consumed, [0, 1, 2, 3])
-        self.assertEqual(list(prepared), list(range(1, 12)))
+        try:
+            self.assertEqual(next(prepared), tuple(range(8, 16)))
+            self.assertEqual(consumed, list(range(32)))
+            release.set()
+            self.assertCountEqual(
+                [number for batch in prepared for number in batch], [*range(8), *range(16, 96)]
+            )
+        finally:
+            release.set()
+            prepared.close()
+
+    def test_concurrent_preparation_refills_workers_while_first_item_is_blocked(self):
+        first_started = Event()
+        release_first = Event()
+
+        def prepare(number):
+            if number == 0:
+                first_started.set()
+                self.assertTrue(release_first.wait(3))
+            return number
+
+        prepared = _prepare_references_concurrently(prepare, range(12))
+        try:
+            self.assertCountEqual([next(prepared) for _ in range(11)], range(1, 12))
+            self.assertTrue(first_started.is_set())
+            release_first.set()
+            self.assertEqual(list(prepared), [0])
+        finally:
+            release_first.set()
+            prepared.close()
 
     def test_concurrent_failure_waits_for_workers_before_cleanup(self):
         started = Barrier(4)
@@ -169,7 +199,8 @@ class StoryVoiceCandidateTest(unittest.TestCase):
         finished = []
 
         def prepare(number):
-            started.wait(timeout=3)
+            if number < 4:
+                started.wait(timeout=3)
             if number == 0:
                 failed.set()
                 raise RuntimeError("decoder failed")
@@ -179,7 +210,7 @@ class StoryVoiceCandidateTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "decoder failed"):
             list(_prepare_references_concurrently(prepare, range(12)))
-        self.assertCountEqual(finished, [1, 2, 3])
+        self.assertTrue({1, 2, 3} <= set(finished))
 
     def test_concurrent_generator_close_waits_for_running_workers(self):
         started = Barrier(4)
@@ -198,6 +229,112 @@ class StoryVoiceCandidateTest(unittest.TestCase):
         release.set()
         prepared.close()
         self.assertCountEqual(finished, [1, 2, 3])
+
+    def test_candidate_report_restores_identity_order_after_out_of_order_completion(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            media_ids = [2, 10, 20, *range(30, 37)]
+            expected_order = sorted(media_ids, key=str)
+            story = write_story(
+                root / "story.jsonl",
+                [{**story_line(1, "Hero."), "source_media_ids": media_ids}],
+            )
+            audio = root / "audio"
+            audio.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio)
+            document = json.loads(bank_index.read_text())
+            document["banks"][0]["embedded_media_ids"] = media_ids
+            document["banks"][0]["events"][0]["media_ids"] = media_ids
+            bank_index.write_text(json.dumps(document))
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={media_id: str(media_id).encode() for media_id in media_ids},
+                routes={wwise_event_id("play_hero_line"): tuple(media_ids)},
+            )
+
+            def decode(data, output, media_id, _decoder, *, bank=None):
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(data)
+                digest = hashlib.sha256(data).hexdigest()
+                return ImportedReference(output, media_id, digest, digest, bank)
+
+            def complete_in_reverse(prepare, items):
+                return iter([prepare(item) for item in reversed(list(items))])
+
+            def decode_batch(references, decoder):
+                return [
+                    decode(data, output, media_id, decoder, bank=bank)
+                    for data, output, media_id, bank in references
+                ]
+
+            with (
+                patch("r1999extractor.story_voice_candidates.decode_reference_data", decode),
+                patch(
+                    "r1999extractor.story_voice_candidates.analyze_voice_reference", clean_metrics
+                ),
+                patch(
+                    "r1999extractor.story_voice_candidates._prepare_references_concurrently",
+                    side_effect=complete_in_reverse,
+                ) as workers,
+                patch(
+                    "r1999extractor.story_voice_candidates.decode_reference_batch",
+                    side_effect=decode_batch,
+                ) as batch_decoder,
+            ):
+                report_path, report = build_story_voice_candidates(
+                    story,
+                    bank_index,
+                    ["Hero"],
+                    root / "candidates",
+                    decoder="true",
+                    bank_loader=lambda _index, _bank: snapshot,
+                    media_decoder=decode,
+                    analyzer=clean_metrics,
+                )
+            self.assertEqual(workers.call_count, 1)
+            self.assertEqual([len(call.args[0]) for call in batch_decoder.call_args_list], [2, 8])
+            self.assertEqual([item["media_id"] for item in report["candidates"]], expected_order)
+            self.assertEqual(
+                [item["media_id"] for item in json.loads(report_path.read_text())["candidates"]],
+                expected_order,
+            )
+
+    def test_batch_failure_removes_partial_candidate_staging(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = write_story(root / "story.jsonl", [story_line(1, "Hero.")])
+            audio = root / "audio"
+            audio.mkdir()
+            bank_index, bank = write_bank_index(root / "banks.json", audio)
+            snapshot = BankSnapshot(
+                path=bank,
+                sha256=hashlib.sha256(bank.read_bytes()).hexdigest(),
+                media={10: b"voice"},
+                routes={wwise_event_id("play_hero_line"): (10,)},
+            )
+
+            def fail_batch(references, _decoder):
+                output = references[0][1]
+                output.parent.mkdir(parents=True)
+                output.write_bytes(b"partial reference")
+                raise RuntimeError("batch failed")
+
+            with patch(
+                "r1999extractor.story_voice_candidates.decode_reference_batch",
+                side_effect=fail_batch,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "batch failed"):
+                    build_story_voice_candidates(
+                        story,
+                        bank_index,
+                        ["Hero"],
+                        root / "candidates",
+                        decoder="true",
+                        bank_loader=lambda _index, _bank: snapshot,
+                    )
+            self.assertFalse((root / "candidates").exists())
+            self.assertFalse(list(root.glob(".*.staging-*")))
 
     def test_default_workers_are_eligible_but_custom_callbacks_keep_main_thread_and_guards(self):
         with TemporaryDirectory() as directory:
@@ -623,7 +760,36 @@ class StoryVoiceCandidateTest(unittest.TestCase):
                 analyzer=clean_metrics,
             )
 
-        self.assertEqual(decoded, [b"full external media"])
+            def decode_batch(references, decoder):
+                return [
+                    decode(data, output, media_id, decoder, bank=bank)
+                    for data, output, media_id, bank in references
+                ]
+
+            with (
+                patch("r1999extractor.story_voice_candidates.decode_reference_data", decode),
+                patch(
+                    "r1999extractor.story_voice_candidates.analyze_voice_reference", clean_metrics
+                ),
+                patch(
+                    "r1999extractor.story_voice_candidates.decode_reference_batch",
+                    side_effect=decode_batch,
+                ) as batch_decoder,
+            ):
+                _batch_path, batch_report = build_story_voice_candidates(
+                    story,
+                    bank_index,
+                    ["Hero"],
+                    root / "batch-candidates",
+                    decoder="true",
+                    bank_loader=lambda _index, _filename: snapshot,
+                    media_decoder=decode,
+                    analyzer=clean_metrics,
+                )
+            self.assertEqual(batch_decoder.call_count, 1)
+            self.assertEqual(batch_report["candidates"], report["candidates"])
+
+        self.assertEqual(decoded, [b"full external media", b"full external media"])
         self.assertEqual(
             report["candidates"][0]["source_sha256"],
             hashlib.sha256(b"full external media").hexdigest(),
