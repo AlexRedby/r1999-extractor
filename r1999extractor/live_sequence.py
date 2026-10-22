@@ -21,6 +21,7 @@ from vntts_artifacts.live_sequence import (
 )
 from vntts_artifacts.story_index import StoryIndexError, load_story_index
 
+from r1999extractor.story_graph import StoryGraphError, ordered_step_ids, parse_story_graph
 from r1999extractor.story_index import (
     Reverse1999StoryError,
     _load_unity_environment,
@@ -35,8 +36,10 @@ class Reverse1999LiveSequenceError(RuntimeError):
     """Raised when raw story events cannot form a safe linear sequence plan."""
 
 
-def build_live_sequence_chapter(document, source, story_line_ids, *, language_index=2):
-    """Return one linear chapter plan from exact raw array order."""
+def build_live_sequence_chapter(
+    document, source, story_line_ids, *, group_document, language_index=2
+):
+    """Return one chapter plan from the game's explicit story-group edges."""
     if not isinstance(document, list) or len(document) < 3 or not isinstance(document[2], list):
         raise Reverse1999LiveSequenceError(f"Story asset {source} has an unsupported structure")
     chapter = str(source).removeprefix("json_story_step_")
@@ -48,19 +51,19 @@ def build_live_sequence_chapter(document, source, story_line_ids, *, language_in
             raise Reverse1999LiveSequenceError(
                 f"Story asset {source} raw step {position} has an unsupported structure"
             )
-        try:
-            sequence = int(step[0])
-        except (TypeError, ValueError) as error:
+        sequence = step[0]
+        if not isinstance(sequence, int) or isinstance(sequence, bool):
             raise Reverse1999LiveSequenceError(
                 f"Story asset {source} raw step {position} has no integer sequence"
-            ) from error
+            )
         if sequence < 0 or sequence in seen_sequences:
             raise Reverse1999LiveSequenceError(
                 f"Story asset {source} repeats or invalidates raw sequence {sequence}"
             )
         seen_sequences.add(sequence)
         payload = step[2]
-        text = _localized(payload, 15, language_index)
+        dialogue_hidden = bool(payload) and payload[0] in (0, 10)
+        text = "" if dialogue_hidden else _localized(payload, 15, language_index)
         choice_targets = _choice_targets(
             step,
             source=source,
@@ -71,7 +74,7 @@ def build_live_sequence_chapter(document, source, story_line_ids, *, language_in
         if text and _is_silent_text(text):
             kind = "silent"
             bound_line_id = None
-        elif line_id in story_line_ids:
+        elif not dialogue_hidden and line_id in story_line_ids:
             kind = "speech"
             bound_line_id = line_id
             bound_line_ids.add(line_id)
@@ -99,8 +102,26 @@ def build_live_sequence_chapter(document, source, story_line_ids, *, language_in
         )
     if not raw_events:
         raise Reverse1999LiveSequenceError(f"Story asset {source} has no raw steps")
-    raw_events.sort(key=lambda event: event["sequence"])
-    event_sequences = {event["sequence"] for event in raw_events}
+    event_sequences = dict.fromkeys(event["sequence"] for event in raw_events)
+    try:
+        graph = parse_story_graph(
+            group_document, event_sequences, source=f"json_story_group_{chapter}"
+        )
+    except StoryGraphError as error:
+        raise Reverse1999LiveSequenceError(str(error)) from error
+    graph_sequences = set(graph).union(target for targets in graph.values() for target in targets)
+    missing_graph_sequences = graph_sequences.difference(event_sequences)
+    if missing_graph_sequences:
+        raise Reverse1999LiveSequenceError(
+            f"Story group json_story_group_{chapter} references missing raw sequence "
+            f"{sorted(missing_graph_sequences)[0]}"
+        )
+    incoming = {target for targets in graph.values() for target in targets}
+    entry_sequences = (
+        list(event_sequences)
+        if len(event_sequences) == 1
+        else [group[0][0] for group in group_document if group and group[0][0] not in incoming]
+    )
     for event in raw_events:
         targets = event["choice_targets"] or ()
         missing_targets = set(targets).difference(event_sequences).difference({0})
@@ -121,27 +142,28 @@ def build_live_sequence_chapter(document, source, story_line_ids, *, language_in
 
     raw_event_by_sequence = {event["sequence"]: event for event in raw_events}
     events = []
-    for index, raw_event in enumerate(raw_events):
-        final = index + 1 == len(raw_events)
+    ordered_graph = {sequence: graph[sequence] for sequence in entry_sequences}
+    ordered_graph.update(graph)
+    for sequence in ordered_step_ids(ordered_graph):
+        raw_event = raw_event_by_sequence[sequence]
         choice_targets = raw_event["choice_targets"]
         if choice_targets is not None:
             successor = tuple(
                 f"reverse1999:{chapter}:event:{target}" for target in choice_targets if target != 0
             )
         else:
-            next_event = raw_event_by_sequence.get(raw_event["sequence"] + 1)
-            successor = () if next_event is None else (next_event["event_id"],)
+            successor = tuple(
+                raw_event_by_sequence[target]["event_id"] for target in graph[sequence]
+            )
         if choice_targets is not None:
             control = "manual"
         elif raw_event["kind"] == "wait":
             control = "manual"
-        elif not successor and not final:
-            # A missing raw sequence is a control-flow boundary, not permission
-            # to jump to the next larger number. Stop for manual recovery.
+        elif len(successor) > 1:
             control = "manual"
             if raw_event["kind"] == "transition":
-                raw_event["kind"] = "wait"
-        elif final:
+                raw_event["kind"] = "choice"
+        elif not successor:
             control = "terminal"
         elif raw_event["kind"] == "transition":
             control = "passive"
@@ -157,7 +179,11 @@ def build_live_sequence_chapter(document, source, story_line_ids, *, language_in
         if raw_event["line_id"] is not None:
             event["line_id"] = raw_event["line_id"]
         events.append(event)
-    entry_event_ids = _entry_event_ids(events)
+    entry_event_ids = _entry_event_ids(
+        events,
+        [raw_event_by_sequence[sequence]["event_id"] for sequence in entry_sequences],
+        source=source,
+    )
     return {
         "chapter": chapter,
         "entry_event_ids": entry_event_ids,
@@ -190,21 +216,27 @@ def build_live_sequence_document(
     selected_documents = {
         source: document
         for source, document in story_documents.items()
-        if source.removeprefix("json_story_step_") in indexed_chapters
+        if source.startswith("json_story_step_")
+        and source.removeprefix("json_story_step_") in indexed_chapters
     }
     if not selected_documents:
         raise Reverse1999LiveSequenceError(
             "No raw story document matches a chapter in the selected story index"
         )
-    chapters = [
-        build_live_sequence_chapter(
-            document,
-            source,
-            story_line_ids,
-            language_index=language_index,
+    chapters = []
+    for source, document in sorted(selected_documents.items()):
+        group_source = source.replace("json_story_step_", "json_story_group_", 1)
+        if group_source not in story_documents:
+            raise Reverse1999LiveSequenceError(f"Story bundle does not contain {group_source!r}")
+        chapters.append(
+            build_live_sequence_chapter(
+                document,
+                source,
+                story_line_ids,
+                group_document=story_documents[group_source],
+                language_index=language_index,
+            )
         )
-        for source, document in sorted(selected_documents.items())
-    ]
     return {
         "schema": LIVE_SEQUENCE_SCHEMA,
         "schema_version": LIVE_SEQUENCE_SCHEMA_VERSION,
@@ -227,9 +259,9 @@ def extract_story_documents(bundle, *, chapters=()):
         if obj.type.name != "TextAsset":
             continue
         asset = obj.read()
-        if not asset.m_Name.startswith("json_story_step_"):
+        if not asset.m_Name.startswith(("json_story_step_", "json_story_group_")):
             continue
-        chapter = asset.m_Name.removeprefix("json_story_step_")
+        chapter = asset.m_Name.rsplit("_", 1)[1]
         if selected_chapters and chapter not in selected_chapters:
             continue
         try:
@@ -241,13 +273,12 @@ def extract_story_documents(bundle, *, chapters=()):
         if asset.m_Name in documents:
             raise Reverse1999LiveSequenceError(f"Story bundle repeats asset {asset.m_Name!r}")
         documents[asset.m_Name] = document
-    missing = selected_chapters.difference(
-        source.removeprefix("json_story_step_") for source in documents
-    )
-    if missing:
-        raise Reverse1999LiveSequenceError(
-            f"Story bundle does not contain selected chapter {sorted(missing)[0]!r}"
-        )
+    chapters_to_check = selected_chapters or {source.rsplit("_", 1)[1] for source in documents}
+    for chapter in sorted(chapters_to_check):
+        for prefix in ("json_story_step_", "json_story_group_"):
+            source = f"{prefix}{chapter}"
+            if source not in documents:
+                raise Reverse1999LiveSequenceError(f"Story bundle does not contain {source!r}")
     return documents
 
 
@@ -348,13 +379,10 @@ def _choice_targets(step, *, source, sequence):
     return tuple(targets)
 
 
-def _entry_event_ids(events):
+def _entry_event_ids(events, entries, *, source):
     by_id = {event["event_id"]: event for event in events}
-    incoming = {event_id: 0 for event_id in by_id}
-    for event in events:
-        for successor_id in event["successors"]:
-            incoming[successor_id] += 1
-    entries = [event_id for event_id, count in incoming.items() if count == 0]
+    if not entries:
+        raise Reverse1999LiveSequenceError(f"Story asset {source} has no game entry step")
     reachable = set()
 
     def visit(start):
@@ -368,12 +396,12 @@ def _entry_event_ids(events):
 
     for event_id in entries:
         visit(event_id)
-    # A disconnected choice loop has no zero-indegree node. It is still a valid
-    # explicit OCR/manual anchor, so expose one stable entry for each such graph.
-    for event_id in by_id:
-        if event_id not in reachable:
-            entries.append(event_id)
-            visit(event_id)
+    unreachable = set(by_id).difference(reachable)
+    if unreachable:
+        raise Reverse1999LiveSequenceError(
+            f"Story asset {source} has raw event {sorted(unreachable)[0]!r} "
+            "unreachable from game entries"
+        )
     return entries
 
 

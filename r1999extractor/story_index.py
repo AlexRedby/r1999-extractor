@@ -38,6 +38,7 @@ from r1999extractor.story_audio import (
     StoryAudioResolver,
     build_audio_registry,
 )
+from r1999extractor.story_graph import StoryGraphError, ordered_step_ids, parse_story_graph
 
 story_asset_name = "configs/story"
 story_bundle_filename = f"{hashlib.md5(story_asset_name.encode()).hexdigest()}.dat"
@@ -254,16 +255,46 @@ def _parse_story_audio_cues(step, *, source, sequence, language_index):
     return tuple(cues)
 
 
-def parse_story_document(document, source, *, language_index=2, include_non_speakable=False):
+def parse_story_document(
+    document, source, *, language_index=2, include_non_speakable=False, group_document=None
+):
     if not isinstance(document, list) or len(document) < 3 or not isinstance(document[2], list):
         raise Reverse1999StoryError(f"Story asset {source} has an unsupported structure")
     chapter = source.removeprefix("json_story_step_")
+    steps = document[2]
+    successors = None
+    if group_document is not None:
+        by_id = {}
+        for step in steps:
+            if not isinstance(step, list) or len(step) < 3 or not isinstance(step[2], list):
+                raise Reverse1999StoryError(f"Story asset {source} has a malformed raw step")
+            step_id = step[0]
+            if (
+                not isinstance(step_id, int)
+                or isinstance(step_id, bool)
+                or step_id < 0
+                or step_id in by_id
+            ):
+                raise Reverse1999StoryError(
+                    f"Story asset {source} has an invalid step ID {step_id!r}"
+                )
+            by_id[step_id] = step
+        try:
+            graph = parse_story_graph(group_document, by_id, source=f"json_story_group_{chapter}")
+        except StoryGraphError as error:
+            raise Reverse1999StoryError(str(error)) from error
+        steps = [by_id[step_id] for step_id in ordered_step_ids(graph) if step_id in by_id]
+        # Missing raw nodes stay boundaries; their outgoing edges cannot supply context.
+        successors = {step_id: targets for step_id, targets in graph.items() if step_id in by_id}
     lines = []
-    for position, step in enumerate(document[2]):
+    for position, step in enumerate(steps):
         if not isinstance(step, list) or len(step) < 3 or not isinstance(step[2], list):
             continue
         payload = step[2]
         if len(payload) <= 15:
+            continue
+        if payload[0] in (0, 10):
+            # None hides editor text; BgEffStack is skipped by the game controller.
             continue
         raw_text = _localized(payload[15], language_index)
         if not raw_text:
@@ -311,9 +342,10 @@ def parse_story_document(document, source, *, language_index=2, include_non_spea
                 story_audio_cues=story_audio_cues,
                 speakable=speakable,
                 filter_reason=filter_reason,
+                story_order=position + 1 if successors is not None else None,
             )
         )
-    return lines
+    return add_story_context(lines, successors=successors) if successors is not None else lines
 
 
 def _language_text(language, key, fallback=""):
@@ -378,7 +410,8 @@ def annotate_anecdote_lines(lines, language, tables):
                 story_group=metadata["story_group"],
                 story_title=metadata["story_title"] or None,
                 episode_title=metadata["episode_title"] or None,
-                story_order=(metadata["story_order"] * 1_000) + metadata["episode_order"],
+                story_order=(metadata["story_order"] * 1_000 + metadata["episode_order"]) * 10_000
+                + (line.story_order if line.story_order is not None else line.sequence),
                 collection_id=f"reverse1999:anecdote:{metadata['story_group']}",
                 collection_title=metadata["story_title"] or f"Anecdote {metadata['story_group']}",
                 collection_kind="anecdote",
@@ -443,7 +476,8 @@ def annotate_main_story_episode_lines(lines, language, tables):
                 story_group=metadata["story_group"],
                 story_title=metadata["story_title"],
                 episode_title=metadata["episode_title"],
-                story_order=metadata["story_order"] * 10_000 + line.sequence,
+                story_order=metadata["story_order"] * 10_000
+                + (line.story_order if line.story_order is not None else line.sequence),
                 collection_id=f"reverse1999:main-story:{metadata['story_group'].removeprefix('main:')}",
                 collection_title=metadata["story_title"],
                 collection_kind="main_story",
@@ -504,7 +538,8 @@ def annotate_activity220_story_lines(lines, language, tables):
                 story_group=metadata["story_group"],
                 story_title=metadata["story_title"] or None,
                 episode_title=metadata["episode_title"] or None,
-                story_order=metadata["story_order"] * 1_000 + line.sequence,
+                story_order=metadata["story_order"] * 1_000
+                + (line.story_order if line.story_order is not None else line.sequence),
                 collection_id=f"reverse1999:character-story:activity220:{metadata['story_group']}",
                 collection_title=(
                     metadata["story_title"] or f"Character story {metadata['story_group']}"
@@ -710,14 +745,23 @@ def extract_story_lines(bundle, *, language_index=2, include_non_speakable=False
     assets = [obj for obj in environment.objects if obj.type.name == "TextAsset"]
     lines = []
     story_assets = []
+    group_assets = {}
     for obj in assets:
         asset = obj.read()
         if asset.m_Name.startswith("json_story_step_"):
             story_assets.append(asset)
+        elif asset.m_Name.startswith("json_story_group_"):
+            if asset.m_Name in group_assets:
+                raise Reverse1999StoryError(f"Story bundle repeats asset {asset.m_Name!r}")
+            group_assets[asset.m_Name] = asset
     story_assets.sort(key=lambda asset: asset.m_Name)
     for current, asset in enumerate(story_assets, start=1):
         try:
             document = json.loads(asset.m_Script.lstrip("\ufeff"))
+            group_name = asset.m_Name.replace("json_story_step_", "json_story_group_", 1)
+            if group_name not in group_assets:
+                raise Reverse1999StoryError(f"Story bundle is missing graph asset {group_name!r}")
+            group_document = json.loads(group_assets[group_name].m_Script.lstrip("\ufeff"))
         except (TypeError, json.JSONDecodeError) as error:
             raise Reverse1999StoryError(f"Invalid JSON in {asset.m_Name}: {error}") from error
         lines.extend(
@@ -726,14 +770,47 @@ def extract_story_lines(bundle, *, language_index=2, include_non_speakable=False
                 asset.m_Name,
                 language_index=language_index,
                 include_non_speakable=include_non_speakable,
+                group_document=group_document,
             )
         )
         progress(current, len(story_assets), asset.m_Name)
-    lines.sort(key=lambda line: (line.chapter, line.sequence, line.line_id))
-    return add_story_context(lines)
+    return lines
 
 
-def add_story_context(lines):
+def add_story_context(lines, *, successors=None):
+    if successors is not None:
+        predecessors = defaultdict(list)
+        for step_id, targets in successors.items():
+            for target in targets:
+                predecessors[target].append(step_id)
+        by_id = {line.sequence: line for line in lines if line.speakable}
+
+        def neighbor(step_id, edges, reverse_edges):
+            visited = {step_id}
+            while len(edges.get(step_id, ())) == 1:
+                target = edges[step_id][0]
+                if (
+                    target in visited
+                    or target not in successors
+                    or len(reverse_edges.get(target, ())) != 1
+                ):
+                    return None
+                if target in by_id:
+                    return by_id[target].text
+                visited.add(target)
+                step_id = target
+            return None
+
+        return [
+            replace(
+                line,
+                previous_text=neighbor(line.sequence, predecessors, successors),
+                next_text=neighbor(line.sequence, successors, predecessors),
+            )
+            if line.speakable
+            else line
+            for line in lines
+        ]
     by_chapter = defaultdict(list)
     for line in lines:
         if line.speakable:
