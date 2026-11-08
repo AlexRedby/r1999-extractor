@@ -1,10 +1,9 @@
 """Optional progress side channel shared by source-audio authoring commands."""
 
-from pathlib import Path
+import json
+import sys
 from time import monotonic
-from typing import Callable, Literal, TypedDict
-
-from vntts_artifacts.atomic_io import atomic_write_json
+from typing import Callable, Literal, TextIO, TypedDict
 
 SourceAudioStage = Literal["duration", "semantics", "references", "portraits"]
 SourceAudioState = Literal["analyzing", "publishing"]
@@ -42,11 +41,11 @@ def report_source_audio_progress(
         )
 
 
-class SourceAudioProgressFile:
-    """Keep intermediate snapshots small; always publish boundaries and state changes."""
+class SourceAudioProgressStream:
+    """Throttle intermediate events; always emit boundaries and state changes."""
 
-    def __init__(self, path: Path):
-        self.path = Path(path)
+    def __init__(self, stream: TextIO | None = None):
+        self.stream = sys.stdout if stream is None else stream
         self._last_write = 0.0
         self._last_state = None
 
@@ -59,7 +58,7 @@ class SourceAudioProgressFile:
             and now - self._last_write < 0.2
         ):
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(self.path, progress)
+        self.stream.write("\nR1999_PROGRESS " + json.dumps(progress, separators=(",", ":")) + "\n")
+        self.stream.flush()
         self._last_write = now
         self._last_state = state

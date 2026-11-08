@@ -27,7 +27,7 @@ from r1999extractor.reverse1999_index import bank_index_staleness_reasons
 from r1999extractor.source_audio_duration import _audio_resolution
 from r1999extractor.source_audio_progress import (
     SourceAudioProgressCallback,
-    SourceAudioProgressFile,
+    SourceAudioProgressStream,
     report_source_audio_progress,
 )
 from r1999extractor.story_audio import StoryAudioResolutionError, StoryAudioResolver
@@ -674,31 +674,13 @@ def create_parser():
     parser.add_argument("--chapter", action="append", default=[])
     parser.add_argument("--decoder", default="vgmstream-cli")
     parser.add_argument("--cache-dir", type=Path)
-    parser.add_argument("--progress-file", type=Path)
+    parser.add_argument("--progress-stdout", action="store_true")
     parser.add_argument("--device", default="cpu")
     return parser
 
 
 def main(arguments=None):
     options = create_parser().parse_args(arguments)
-    if options.progress_file is not None and (
-        options.progress_file.expanduser()
-        .resolve()
-        .is_relative_to(options.model.expanduser().resolve())
-        or options.progress_file.expanduser().resolve()
-        in {
-            path.expanduser().resolve()
-            for path in (
-                options.story_index,
-                options.bank_index,
-                options.model,
-                options.evidence_output,
-                options.story_output,
-            )
-        }
-    ):
-        print("Progress file must differ from source-audio inputs and outputs", file=sys.stderr)
-        return 1
     try:
         result = publish_source_audio_semantic_evidence(
             options.story_index,
@@ -710,11 +692,7 @@ def main(arguments=None):
             decoder=options.decoder,
             cache_dir=options.cache_dir,
             device=options.device,
-            progress=(
-                SourceAudioProgressFile(options.progress_file)
-                if options.progress_file is not None
-                else None
-            ),
+            progress=(SourceAudioProgressStream() if options.progress_stdout else None),
         )
     except (
         OSError,
