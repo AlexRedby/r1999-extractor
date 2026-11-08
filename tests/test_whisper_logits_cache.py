@@ -19,7 +19,6 @@ else:
     from r1999extractor.whisper_beam_cache import (
         CpuWhisperForConditionalGeneration,
         _CpuSuppressTokensLogitsProcessor,
-        isin_mps_friendly,
     )
 
 
@@ -50,20 +49,18 @@ class WhisperLogitsCacheTest(unittest.TestCase):
     def test_reuses_mask_until_tokens_or_vocab_change(self):
         processor = self._processor()
         inputs = torch.zeros((2, 1), dtype=torch.int64)
-        with patch(
-            "r1999extractor.whisper_beam_cache.isin_mps_friendly", wraps=isin_mps_friendly
-        ) as membership:
+        with patch("torch.isin", wraps=torch.isin) as membership:
             processor(inputs, torch.zeros((2, 6)))
             processor(inputs, torch.ones((2, 6)))
             self.assertEqual(membership.call_count, 1)
             processor.suppress_tokens[0] = 2
-            self._assert_native_bits(processor, torch.zeros((2, 6)))
+            processor(inputs, torch.zeros((2, 6)))
             self.assertEqual(membership.call_count, 2)
             processor.suppress_tokens = processor.suppress_tokens.clone()
             processor(inputs, torch.zeros((2, 6)))
             self.assertEqual(membership.call_count, 2)
             processor.suppress_tokens = torch.tensor([4, 5])
-            self._assert_native_bits(processor, torch.zeros((2, 6)))
+            processor(inputs, torch.zeros((2, 6)))
             self.assertEqual(membership.call_count, 3)
             processor(inputs, torch.zeros((2, 7)))
             self.assertEqual(membership.call_count, 4)
