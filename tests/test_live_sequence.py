@@ -69,6 +69,61 @@ def choice(text, target):
 
 
 class Reverse1999LiveSequenceTest(unittest.TestCase):
+    def test_symbol_only_dialogue_is_silent_with_its_explicit_successor(self):
+        for text in ("...?!", "...!", "？！", "—…", "♪ ♫", "※", "« »", " ⋯ "):
+            with self.subTest(text=text):
+                document = story_document()
+                document[2][2][2][15][2] = text
+
+                chapter = build_live_sequence_chapter(
+                    document,
+                    "json_story_step_314601",
+                    {"reverse1999:314601:2"},
+                    group_document=story_group(),
+                )
+
+                event = chapter["events"][2]
+                self.assertEqual(event["kind"], "silent")
+                self.assertEqual(event["control"], "automatic")
+                self.assertEqual(event["successors"], ["reverse1999:314601:event:4"])
+                self.assertNotIn("line_id", event)
+
+    def test_symbol_only_choice_still_requires_manual_control(self):
+        document = story_document()
+        step = document[2][2]
+        step[2][15][2] = "...?!"
+        step.extend([[] for _ in range(8)])
+        step[10] = [choice("Continue", 4)]
+
+        chapter = build_live_sequence_chapter(
+            document,
+            "json_story_step_314601",
+            {"reverse1999:314601:2"},
+            group_document=story_group(),
+        )
+
+        event = chapter["events"][2]
+        self.assertEqual(event["kind"], "silent")
+        self.assertEqual(event["control"], "manual")
+        self.assertEqual(event["successors"], ["reverse1999:314601:event:4"])
+
+    def test_unindexed_words_numbers_and_damaged_text_still_require_manual_control(self):
+        for text in ("Oh!", "123", "?!\ufffd", "\ufffc", "?!\x00"):
+            with self.subTest(text=text):
+                document = story_document()
+                document[2][2][2][15][2] = text
+
+                chapter = build_live_sequence_chapter(
+                    document,
+                    "json_story_step_314601",
+                    {"reverse1999:314601:2"},
+                    group_document=story_group(),
+                )
+
+                event = chapter["events"][2]
+                self.assertEqual(event["kind"], "wait")
+                self.assertEqual(event["control"], "manual")
+
     def test_raw_step_ids_are_not_coerced_into_different_game_ids(self):
         for value in (True, 2.5, "2"):
             with self.subTest(value=value):

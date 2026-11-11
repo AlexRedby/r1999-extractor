@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from unicodedata import category
 
 from vntts_artifacts.file_integrity import sha256_file
 from vntts_artifacts.live_sequence import (
@@ -28,8 +28,6 @@ from r1999extractor.story_index import (
     clean_story_text,
     find_story_bundle,
 )
-
-_SILENT_TEXT_PATTERN = re.compile(r"[\s.…·⋯]+")
 
 
 class Reverse1999LiveSequenceError(RuntimeError):
@@ -351,7 +349,11 @@ def _localized(payload, index, language_index):
 
 
 def _is_silent_text(text):
-    return bool(text) and _SILENT_TEXT_PATTERN.fullmatch(text) is not None
+    return bool(text.strip()) and all(
+        character.isspace()
+        or (category(character)[0] in "PS" and character not in "\ufffc\ufffd")
+        for character in text
+    )
 
 
 def _choice_targets(step, *, source, sequence):
