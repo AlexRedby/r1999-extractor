@@ -15,6 +15,10 @@ from r1999extractor.source_audio_matching import (
     BOUNDED_SEMANTIC_EVIDENCE_METHOD,
     SOURCE_AUDIO_COMPARISON,
 )
+from r1999extractor.source_audio_policy import (
+    MAIN_STORY_SOURCE_AUDIO_REASON,
+    SOURCE_AUDIO_COMPLETENESS_POLICY,
+)
 from r1999extractor.source_audio_semantics import (
     SEMANTIC_EVIDENCE_METHOD,
     SEMANTIC_EVIDENCE_PREPROCESSING,
@@ -94,6 +98,101 @@ def _wav_bytes(pcm, rate, channels=1, sample_width=2):
 
 
 class SourceAudioSemanticsTest(unittest.TestCase):
+    def test_main_only_successor_replaces_old_partial_without_model_bank_or_asr(self):
+        record = _record(
+            1, "The displayed translation differs from the recorded language.", 11, b"voice"
+        )
+        record.update(
+            collection_kind="main_story",
+            source_audio_completeness="partial",
+            source_audio_completeness_reason="asr-transcript-mismatch",
+            source_audio_semantic_evidence_id="legacy",
+            source_audio_semantic_evidence_entry_id="old-main",
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.jsonl"
+            evidence = root / "evidence.json"
+            write_story_index_document(
+                source, {"language": "en", "source_audio_semantics": {"applied_count": 1}}, [record]
+            )
+            before = source.read_bytes()
+            with (
+                patch("r1999extractor.source_audio_semantics.WhisperTranscriber") as transcriber,
+                patch("r1999extractor.source_audio_semantics.sha256_control_path") as model_hash,
+                patch("r1999extractor.source_audio_semantics._load_resolver") as resolver,
+            ):
+                events = []
+                result = publish_source_audio_semantic_evidence(
+                    source,
+                    "missing-bank",
+                    evidence,
+                    root / "output.jsonl",
+                    "missing-model",
+                    progress=events.append,
+                )
+            transcriber.assert_not_called()
+            model_hash.assert_not_called()
+            resolver.assert_not_called()
+            self.assertEqual(source.read_bytes(), before)
+            self.assertFalse(evidence.exists())
+            annotated = annotate_story_index_source_audio_semantics(
+                source, "unused-legacy-evidence", root / "annotated.jsonl"
+            )
+            self.assertEqual(
+                annotated.records[0].to_record()["source_audio_completeness_reason"],
+                MAIN_STORY_SOURCE_AUDIO_REASON,
+            )
+        main = result.records[0].to_record()
+        self.assertEqual(main["source_audio_completeness"], "full")
+        self.assertEqual(main["source_audio_completeness_reason"], MAIN_STORY_SOURCE_AUDIO_REASON)
+        self.assertEqual(
+            result.metadata["source_audio_completeness_policy"], SOURCE_AUDIO_COMPLETENESS_POLICY
+        )
+        self.assertNotIn("source_audio_semantics", result.metadata)
+        self.assertNotIn("source_audio_semantic_evidence_entry_id", main)
+        self.assertEqual(events[-1]["state"], "publishing")
+
+    def test_mixed_publication_keeps_asr_for_character_stories_only(self):
+        main = _record(1, "An English subtitle for a different recorded language.", 11, b"main")
+        main["collection_kind"] = "main_story"
+        character = _record(2, "Doctor!", 22, b"character")
+        character["collection_kind"] = "character_story"
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.jsonl"
+            evidence = root / "evidence.json"
+            write_story_index_document(source, {"language": "en"}, [main, character])
+            resolver = Mock()
+            resolver.read_single_available_media.return_value = (22, b"character")
+            transcriber = Mock(return_value="Stop it!")
+            with patch("r1999extractor.source_audio_semantics._decode_wem", return_value=b"wav"):
+                result = publish_source_audio_semantic_evidence(
+                    source,
+                    "unused",
+                    evidence,
+                    root / "output.jsonl",
+                    "unused",
+                    model_sha256="a" * 64,
+                    resolver=resolver,
+                    transcriber=transcriber,
+                )
+            authority = load_source_audio_semantic_evidence(evidence)
+        transcriber.assert_called_once()
+        resolver.read_single_available_media.assert_called_once()
+        self.assertEqual(
+            [entry["source_line_ids"] for entry in authority["entries"]], [[character["line_id"]]]
+        )
+        records = [line.to_record() for line in result.records]
+        self.assertEqual(records[0]["source_audio_completeness"], "full")
+        self.assertEqual(
+            records[0]["source_audio_completeness_reason"], MAIN_STORY_SOURCE_AUDIO_REASON
+        )
+        self.assertNotIn("source_audio_semantic_evidence_id", records[0])
+        self.assertEqual(records[1]["source_audio_completeness"], "partial")
+        self.assertEqual(records[1]["source_audio_completeness_reason"], "asr-transcript-mismatch")
+        self.assertEqual(result.metadata["source_audio_semantics"]["applied_count"], 1)
+
     def test_publishes_recomputable_bounded_evidence_and_keeps_legacy_compatible(self):
         expected = "Madam Hofmann was calm till the end. Why? Was she not afraid?"
         observed = "Mother Mothman was calm till the end. Why? Was she not afraid?"

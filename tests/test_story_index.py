@@ -9,6 +9,10 @@ from vntts_artifacts.story_index import load_story_index
 
 from r1999extractor.reverse1999_index import index_version
 from r1999extractor.source_audio_duration import SourceAudioTiming
+from r1999extractor.source_audio_policy import (
+    MAIN_STORY_SOURCE_AUDIO_REASON,
+    SOURCE_AUDIO_COMPLETENESS_POLICY,
+)
 from r1999extractor.story_audio import AudioResolution
 from r1999extractor.story_index import (
     Reverse1999StoryError,
@@ -56,6 +60,56 @@ def story_audio_cue(
 
 
 class StoryIndexTest(unittest.TestCase):
+    def test_resolved_main_story_is_full_without_asr_or_timing_and_survives_short_duration(self):
+        line = replace(
+            parse_story_document(
+                [
+                    "title",
+                    "",
+                    [
+                        [
+                            1,
+                            "step",
+                            payload("A", "An English translation of foreign speech.", voice="700"),
+                        ]
+                    ],
+                ],
+                "json_story_step_100101",
+            )[0],
+            collection_kind="main_story",
+        )
+
+        class Resolver:
+            @staticmethod
+            def resolve(_audio_id):
+                return AudioResolution(
+                    "installed",
+                    "resolved_local_media",
+                    audio_id="700",
+                    bank="voice.bnk",
+                    media_ids=(70,),
+                    available_media_ids=(70,),
+                )
+
+        class Probe:
+            @staticmethod
+            def probe(_resolution):
+                return SourceAudioTiming(0.1, 70, "a" * 64, 24000, 2400, "r-test")
+
+        for probe in (None, Probe()):
+            with self.subTest(timed=probe is not None), TemporaryDirectory() as directory:
+                resolved = resolve_story_audio([line], Resolver(), duration_probe=probe)[0]
+                self.assertEqual(resolved.source_audio_completeness, "full")
+                self.assertEqual(
+                    resolved.source_audio_completeness_reason, MAIN_STORY_SOURCE_AUDIO_REASON
+                )
+                output = write_story_index([resolved], Path(directory) / "story.jsonl")
+                rows = [json.loads(raw) for raw in output.read_text().splitlines()]
+                self.assertEqual(
+                    rows[0]["source_audio_completeness_policy"], SOURCE_AUDIO_COMPLETENESS_POLICY
+                )
+                self.assertEqual(rows[1]["source_audio_completeness"], "full")
+
     def test_rebuilds_bank_index_when_new_bank_is_installed(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

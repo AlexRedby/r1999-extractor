@@ -14,10 +14,59 @@ from r1999extractor.source_audio_duration import (
     annotate_story_index_source_audio_durations,
     classify_source_audio_completeness,
 )
+from r1999extractor.source_audio_policy import MAIN_STORY_SOURCE_AUDIO_REASON
 from r1999extractor.story_audio import AudioResolution
 
 
 class SourceAudioDurationTest(unittest.TestCase):
+    def test_timing_replaces_legacy_main_asr_and_keeps_character_story_partial(self):
+        class Probe:
+            @staticmethod
+            def probe(_resolution):
+                return SourceAudioTiming(0.1, 99, "b" * 64, 24000, 2400, "r-test")
+
+        base = {
+            "record_type": "line",
+            "line_id": "main:1",
+            "chapter": "1",
+            "sequence": 1,
+            "speaker": "A",
+            "text": "An English translation that is longer than the foreign speech.",
+            "kind": "dialogue",
+            "collection_kind": "main_story",
+            "source_audio_status": "available",
+            "source_bank": "voice.bnk",
+            "source_media_ids": [99],
+            "available_media_ids": [99],
+            "source_audio_completeness": "partial",
+            "source_audio_completeness_reason": "asr-transcript-mismatch",
+            "source_audio_semantic_evidence_id": "legacy",
+            "source_audio_semantic_evidence_entry_id": "legacy-main",
+        }
+        character = {**base, "line_id": "character:1", "collection_kind": "character_story"}
+        character.pop("source_audio_semantic_evidence_id")
+        character.pop("source_audio_semantic_evidence_entry_id")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.jsonl"
+            write_story_index_document(
+                source,
+                {"language": "en", "source_audio_semantics": {"applied_count": 1}},
+                [base, character],
+            )
+            result = annotate_story_index_source_audio_durations(
+                source, "unused", root / "timed.jsonl", probe=Probe()
+            )
+        main, other = [line.to_record() for line in result.records]
+        self.assertEqual(main["source_audio_completeness"], "full")
+        self.assertEqual(main["source_audio_completeness_reason"], MAIN_STORY_SOURCE_AUDIO_REASON)
+        self.assertNotIn("source_audio_semantic_evidence_id", main)
+        self.assertNotIn("source_audio_semantics", result.metadata)
+        self.assertEqual(other["source_audio_completeness"], "partial")
+        self.assertEqual(
+            other["source_audio_completeness_reason"], "duration-too-short-for-displayed-text"
+        )
+
     def test_completeness_classifier_proves_partial_but_never_assumes_full(self):
         short = SourceAudioTiming(1.0, 1, "a" * 64, 24000, 24000, "r-test")
 

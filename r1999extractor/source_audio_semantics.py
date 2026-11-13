@@ -30,6 +30,10 @@ from r1999extractor.source_audio_matching import (
     classify_source_audio_text,
     normalize_semantic_text,
 )
+from r1999extractor.source_audio_policy import (
+    apply_main_story_source_audio_policy,
+    has_full_main_story_source_audio,
+)
 from r1999extractor.source_audio_progress import (
     SourceAudioProgressCallback,
     SourceAudioProgressFile,
@@ -186,14 +190,29 @@ def publish_source_audio_semantic_evidence(
     source_sha256 = sha256_file(source)
     document = load_story_index_document(source)
     selected_chapters = {str(chapter).strip() for chapter in chapters if str(chapter).strip()}
+    records = [line.to_record() for line in document.records]
+    metadata = dict(document.metadata)
+    apply_main_story_source_audio_policy(metadata, records)
     candidates = [
         record
-        for line in document.records
-        if (not selected_chapters or line.chapter in selected_chapters)
-        and _is_unknown_timed_source_cue(record := line.to_record())
+        for record in records
+        if (not selected_chapters or record.get("chapter") in selected_chapters)
+        and _is_unknown_timed_source_cue(record)
     ]
     report_source_audio_progress(progress, "semantics", 0, len(candidates))
     if not candidates:
+        if any(
+            has_full_main_story_source_audio(record)
+            and (not selected_chapters or record.get("chapter") in selected_chapters)
+            for record in records
+        ):
+            if sha256_file(source) != source_sha256:
+                raise SourceAudioSemanticEvidenceError(
+                    "Source story index changed during classification"
+                )
+            report_source_audio_progress(progress, "semantics", 0, 0, "publishing")
+            story_destination.parent.mkdir(parents=True, exist_ok=True)
+            return write_story_index_document(story_destination, metadata, records)
         raise SourceAudioSemanticEvidenceError(
             "No unknown timed source-audio cues match the requested chapters"
         )
@@ -530,6 +549,20 @@ def annotate_story_index_source_audio_semantics(
             "Semantic annotation must publish a new story-index destination"
         )
     document = load_story_index_document(source)
+    records = [line.to_record() for line in document.records]
+    metadata = dict(document.metadata)
+    apply_main_story_source_audio_policy(metadata, records)
+    selected_chapters = {str(chapter).strip() for chapter in chapters if str(chapter).strip()}
+    selected_records = [
+        record
+        for record in records
+        if not selected_chapters or record.get("chapter") in selected_chapters
+    ]
+    if any(has_full_main_story_source_audio(record) for record in selected_records) and not any(
+        _is_unknown_timed_source_cue(record) for record in selected_records
+    ):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        return write_story_index_document(destination, metadata, records)
     authority = load_source_audio_semantic_evidence(evidence)
     return _annotate_validated_story_index_source_audio_semantics(
         document,
@@ -569,13 +602,15 @@ def _annotate_validated_story_index_source_audio_semantics(
         for entry in authority["entries"]
     }
     selected_chapters = {str(chapter).strip() for chapter in chapters if str(chapter).strip()}
+    metadata = dict(document.metadata)
+    source_records = [line.to_record() for line in document.records]
+    apply_main_story_source_audio_policy(metadata, source_records)
     records = []
     unresolved = []
     applied = 0
     applied_methods = set()
-    for line in document.records:
-        record = line.to_record()
-        selected = not selected_chapters or line.chapter in selected_chapters
+    for record in source_records:
+        selected = not selected_chapters or record.get("chapter") in selected_chapters
         if selected and _is_unknown_timed_source_cue(record):
             identity = _record_identity(record)
             key = (locale, identity[2], identity[4], identity[3])
@@ -607,7 +642,6 @@ def _annotate_validated_story_index_source_audio_semantics(
         raise SourceAudioSemanticEvidenceError("Semantic evidence matched no unknown cues")
     if len(applied_methods) != 1:
         raise SourceAudioSemanticEvidenceError("Semantic evidence uses incompatible methods")
-    metadata = dict(document.metadata)
     metadata["source_audio_semantics"] = {
         "evidence_id": authority["evidence_id"],
         "evidence_sha256": hashlib.sha256(
@@ -625,6 +659,7 @@ def _annotate_validated_story_index_source_audio_semantics(
 def _is_unknown_timed_source_cue(record):
     return (
         record.get("source_audio_status") == "available"
+        and not has_full_main_story_source_audio(record)
         and record.get("source_audio_completeness") == "unknown"
         and (
             record.get("source_audio_duration_media_id") is not None
@@ -752,7 +787,11 @@ def main(arguments=None):
     ) as error:
         print(error, file=sys.stderr)
         return 1
-    semantics = result.metadata["source_audio_semantics"]
+    semantics = result.metadata.get("source_audio_semantics")
+    if semantics is None:
+        count = sum(has_full_main_story_source_audio(line.to_record()) for line in result.records)
+        print(f"Classified {count} main-story source voices without ASR; wrote {result.path}")
+        return 0
     print(
         f"Applied {semantics['applied_count']} exact semantic decisions "
         f"({semantics['cache_hits']} cached, {semantics['asr_calls']} ASR calls); "

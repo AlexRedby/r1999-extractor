@@ -33,6 +33,11 @@ from r1999extractor.source_audio_duration import (
     SourceAudioDurationProbe,
     classify_source_audio_completeness,
 )
+from r1999extractor.source_audio_policy import (
+    MAIN_STORY_SOURCE_AUDIO_REASON,
+    apply_main_story_source_audio_policy,
+    has_full_main_story_source_audio,
+)
 from r1999extractor.story_audio import (
     StoryAudioResolutionError,
     StoryAudioResolver,
@@ -849,6 +854,15 @@ def resolve_story_audio(lines, resolver, *, duration_probe=None, duration_chapte
             if timing is not None
             else ("unknown", None)
         )
+        if has_full_main_story_source_audio(
+            {
+                "collection_kind": line.collection_kind,
+                "source_audio_status": source_audio_status_by_extractor_status.get(
+                    resolution.status
+                ),
+            }
+        ):
+            completeness, completeness_reason = "full", MAIN_STORY_SOURCE_AUDIO_REASON
         story_audio_cues = []
         for cue in line.story_audio_cues:
             cue_resolution = resolver.resolve(cue.source_audio_id)
@@ -993,6 +1007,7 @@ def write_story_index(lines, output=default_output, *, bundle=None):
             )
             record["story_audio_cues"].append(cue_record)
         records.append(record)
+    apply_main_story_source_audio_policy(metadata, records)
     return write_story_index_document(output, metadata, records)
 
 
