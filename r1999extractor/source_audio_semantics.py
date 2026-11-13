@@ -8,7 +8,6 @@ import io
 import json
 import re
 import sys
-import unicodedata
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +24,12 @@ from vntts_artifacts.story_index import (
 
 from r1999extractor.reverse1999_index import bank_index_staleness_reasons
 from r1999extractor.source_audio_duration import _audio_resolution
+from r1999extractor.source_audio_matching import (
+    BOUNDED_SEMANTIC_EVIDENCE_METHOD,
+    SOURCE_AUDIO_COMPARISON,
+    classify_source_audio_text,
+    normalize_semantic_text,
+)
 from r1999extractor.source_audio_progress import (
     SourceAudioProgressCallback,
     SourceAudioProgressFile,
@@ -38,19 +43,10 @@ SEMANTIC_EVIDENCE_VERSION = 1
 SEMANTIC_EVIDENCE_METHOD = "local-asr-exact-normalized-transcript"
 SEMANTIC_EVIDENCE_PREPROCESSING = "mono-pcm16-resample-poly-16000-v1"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-WORD_PATTERN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", flags=re.UNICODE)
 
 
 class SourceAudioSemanticEvidenceError(RuntimeError):
     """Source-audio semantic evidence cannot be produced or applied safely."""
-
-
-def normalize_semantic_text(text):
-    """Normalize only spoken word identity, not punctuation or typography."""
-    normalized = unicodedata.normalize("NFKC", str(text or ""))
-    return " ".join(
-        token.casefold().replace("’", "'") for token in WORD_PATTERN.findall(normalized)
-    )
 
 
 def semantic_text_sha256(text):
@@ -248,8 +244,9 @@ def publish_source_audio_semantic_evidence(
             "locale": document.metadata.get("language"),
             "displayed_text_sha256": identity[3],
             "normalized_displayed_text_sha256": identity[4],
-            "method": SEMANTIC_EVIDENCE_METHOD,
+            "method": BOUNDED_SEMANTIC_EVIDENCE_METHOD,
             "preprocessing": SEMANTIC_EVIDENCE_PREPROCESSING,
+            "comparison": SOURCE_AUDIO_COMPARISON,
         }
         cache_key = _canonical_sha256(cache_identity)
         cache_path = cache_root / f"{cache_key}.json" if cache_root is not None else None
@@ -291,10 +288,8 @@ def publish_source_audio_semantic_evidence(
                 f"ASR returned no transcript for {record['line_id']}"
             )
         normalized_expected = normalize_semantic_text(record["text"])
-        normalized_observed = normalize_semantic_text(observed)
-        verdict = "full" if normalized_observed == normalized_expected else "partial"
-        reason = (
-            "exact-normalized-asr-transcript" if verdict == "full" else "asr-transcript-mismatch"
+        verdict, reason = classify_source_audio_text(
+            record["text"], observed, locale=document.metadata.get("language", "en")
         )
         key = (document.metadata.get("language"), identity[2], identity[4], identity[3])
         entry = entries.get(key)
@@ -305,11 +300,12 @@ def publish_source_audio_semantic_evidence(
                 "media_sha256": identity[2],
                 "displayed_text_sha256": identity[3],
                 "normalized_displayed_text_sha256": identity[4],
+                "normalized_expected_text": normalized_expected,
                 "observed_transcript": observed,
                 "normalized_observed_text_sha256": semantic_text_sha256(observed),
                 "verdict": verdict,
                 "reason": reason,
-                "method": SEMANTIC_EVIDENCE_METHOD,
+                "method": BOUNDED_SEMANTIC_EVIDENCE_METHOD,
                 "model_sha256": before_model_sha256,
                 "source_line_ids": [],
             }
@@ -379,6 +375,7 @@ def publish_source_audio_semantic_evidence(
             "device": device,
             "decoding": "deterministic_greedy_default",
             "preprocessing": SEMANTIC_EVIDENCE_PREPROCESSING,
+            "comparison": SOURCE_AUDIO_COMPARISON,
         },
         "entries": canonical_entries,
     }
@@ -447,13 +444,34 @@ def validate_source_audio_semantic_evidence(document):
             raise SourceAudioSemanticEvidenceError("Semantic transcript hash changed")
         verdict = entry.get("verdict")
         reason = entry.get("reason")
-        expected_reason = (
-            "exact-normalized-asr-transcript" if verdict == "full" else "asr-transcript-mismatch"
-        )
-        if verdict not in {"full", "partial"} or reason != expected_reason:
-            raise SourceAudioSemanticEvidenceError("Semantic verdict is invalid")
-        if entry.get("method") != SEMANTIC_EVIDENCE_METHOD:
+        method = entry.get("method")
+        if method == BOUNDED_SEMANTIC_EVIDENCE_METHOD:
+            if model.get("comparison") != SOURCE_AUDIO_COMPARISON:
+                raise SourceAudioSemanticEvidenceError("Semantic comparison policy changed")
+            expected = entry.get("normalized_expected_text")
+            if (
+                not isinstance(expected, str)
+                or not expected
+                or normalize_semantic_text(expected) != expected
+                or semantic_text_sha256(expected) != normalized_text_sha256
+            ):
+                raise SourceAudioSemanticEvidenceError("Semantic expected text changed")
+            expected_verdict, expected_reason = classify_source_audio_text(
+                expected, observed, locale=locale
+            )
+        elif method == SEMANTIC_EVIDENCE_METHOD:
+            expected_verdict = (
+                "full" if semantic_text_sha256(observed) == normalized_text_sha256 else "partial"
+            )
+            expected_reason = (
+                "exact-normalized-asr-transcript"
+                if expected_verdict == "full"
+                else "asr-transcript-mismatch"
+            )
+        else:
             raise SourceAudioSemanticEvidenceError("Semantic evidence method changed")
+        if verdict != expected_verdict or reason != expected_reason:
+            raise SourceAudioSemanticEvidenceError("Semantic verdict contradicts transcript")
         source_line_ids = entry.get("source_line_ids")
         if (
             not isinstance(source_line_ids, list)
@@ -554,6 +572,7 @@ def _annotate_validated_story_index_source_audio_semantics(
     records = []
     unresolved = []
     applied = 0
+    applied_methods = set()
     for line in document.records:
         record = line.to_record()
         selected = not selected_chapters or line.chapter in selected_chapters
@@ -564,6 +583,12 @@ def _annotate_validated_story_index_source_audio_semantics(
             if entry is None:
                 unresolved.append(record["line_id"])
             else:
+                if entry["method"] == BOUNDED_SEMANTIC_EVIDENCE_METHOD and entry[
+                    "normalized_expected_text"
+                ] != normalize_semantic_text(record["text"]):
+                    raise SourceAudioSemanticEvidenceError(
+                        "Semantic expected text differs from story"
+                    )
                 record.update(
                     source_audio_completeness=entry["verdict"],
                     source_audio_completeness_reason=entry["reason"],
@@ -571,6 +596,7 @@ def _annotate_validated_story_index_source_audio_semantics(
                     source_audio_semantic_evidence_entry_id=entry["entry_id"],
                 )
                 applied += 1
+                applied_methods.add(entry["method"])
         records.append(record)
     if unresolved:
         raise SourceAudioSemanticEvidenceError(
@@ -579,13 +605,15 @@ def _annotate_validated_story_index_source_audio_semantics(
         )
     if not applied:
         raise SourceAudioSemanticEvidenceError("Semantic evidence matched no unknown cues")
+    if len(applied_methods) != 1:
+        raise SourceAudioSemanticEvidenceError("Semantic evidence uses incompatible methods")
     metadata = dict(document.metadata)
     metadata["source_audio_semantics"] = {
         "evidence_id": authority["evidence_id"],
         "evidence_sha256": hashlib.sha256(
             Path(evidence).expanduser().resolve().read_bytes()
         ).hexdigest(),
-        "method": SEMANTIC_EVIDENCE_METHOD,
+        "method": applied_methods.pop(),
         "selected_chapters": sorted(selected_chapters),
         "applied_count": applied,
         "cache_hits": cache_hits,

@@ -3,6 +3,7 @@ import io
 import json
 import unittest
 import wave
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
@@ -10,7 +11,12 @@ from unittest.mock import Mock, patch
 import numpy as np
 from vntts_artifacts.story_index import load_story_index_document, write_story_index_document
 
+from r1999extractor.source_audio_matching import (
+    BOUNDED_SEMANTIC_EVIDENCE_METHOD,
+    SOURCE_AUDIO_COMPARISON,
+)
 from r1999extractor.source_audio_semantics import (
+    SEMANTIC_EVIDENCE_METHOD,
     SEMANTIC_EVIDENCE_PREPROCESSING,
     SourceAudioSemanticEvidenceError,
     WhisperTranscriber,
@@ -19,6 +25,8 @@ from r1999extractor.source_audio_semantics import (
     load_source_audio_semantic_evidence,
     normalize_semantic_text,
     publish_source_audio_semantic_evidence,
+    semantic_text_sha256,
+    validate_source_audio_semantic_evidence,
 )
 
 
@@ -86,6 +94,83 @@ def _wav_bytes(pcm, rate, channels=1, sample_width=2):
 
 
 class SourceAudioSemanticsTest(unittest.TestCase):
+    def test_publishes_recomputable_bounded_evidence_and_keeps_legacy_compatible(self):
+        expected = "Madam Hofmann was calm till the end. Why? Was she not afraid?"
+        observed = "Mother Mothman was calm till the end. Why? Was she not afraid?"
+        payload = b"installed-cue"
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "timed.jsonl"
+            evidence = root / "evidence.json"
+            write_story_index_document(
+                source, {"language": "en"}, [_record(1, expected, 11, payload)]
+            )
+            resolver = Mock()
+            resolver.read_single_available_media.return_value = (11, payload)
+            with patch("r1999extractor.source_audio_semantics._decode_wem", return_value=b"wav"):
+                story = publish_source_audio_semantic_evidence(
+                    source,
+                    "unused-bank",
+                    evidence,
+                    root / "story.jsonl",
+                    "unused-model",
+                    model_sha256="a" * 64,
+                    resolver=resolver,
+                    transcriber=lambda _wav: observed,
+                )
+            authority = load_source_audio_semantic_evidence(evidence)
+            self.assertEqual(
+                story.metadata["source_audio_semantics"]["method"], BOUNDED_SEMANTIC_EVIDENCE_METHOD
+            )
+            self.assertEqual(authority["model"]["comparison"], SOURCE_AUDIO_COMPARISON)
+            entry = authority["entries"][0]
+            self.assertEqual(entry["normalized_expected_text"], normalize_semantic_text(expected))
+            self.assertEqual(entry["verdict"], "full")
+            self.assertEqual(entry["reason"], "matched-normalized-asr-transcript")
+            annotated = annotate_story_index_source_audio_semantics(
+                source, evidence, root / "annotated.jsonl"
+            )
+            self.assertEqual(annotated.records[0].to_record()["source_audio_completeness"], "full")
+
+            for changed in (
+                {"verdict": "partial", "reason": "asr-transcript-mismatch"},
+                {"normalized_expected_text": "another expected transcript"},
+                {"normalized_expected_text": expected},
+                {
+                    "observed_transcript": "Stop it",
+                    "normalized_observed_text_sha256": semantic_text_sha256("Stop it"),
+                },
+            ):
+                with self.subTest(changed=changed):
+                    invalid = deepcopy(authority)
+                    invalid["entries"][0].update(changed)
+                    _rehash_evidence(invalid)
+                    with self.assertRaises(SourceAudioSemanticEvidenceError):
+                        validate_source_audio_semantic_evidence(invalid)
+            invalid = deepcopy(authority)
+            invalid["model"]["comparison"] = "unknown-policy"
+            _rehash_evidence(invalid)
+            with self.assertRaisesRegex(SourceAudioSemanticEvidenceError, "comparison policy"):
+                validate_source_audio_semantic_evidence(invalid)
+
+            legacy = deepcopy(authority)
+            legacy["model"].pop("comparison")
+            legacy["entries"][0].update(
+                method=SEMANTIC_EVIDENCE_METHOD,
+                verdict="partial",
+                reason="asr-transcript-mismatch",
+            )
+            legacy["entries"][0].pop("normalized_expected_text")
+            _rehash_evidence(legacy)
+            self.assertEqual(validate_source_audio_semantic_evidence(legacy), legacy)
+            evidence.write_text(json.dumps(legacy), encoding="utf-8")
+            legacy_story = annotate_story_index_source_audio_semantics(
+                source, evidence, root / "legacy.jsonl"
+            )
+            self.assertEqual(
+                legacy_story.metadata["source_audio_semantics"]["method"], SEMANTIC_EVIDENCE_METHOD
+            )
+
     def test_normalizes_spoken_identity_without_trusting_punctuation(self):
         self.assertEqual(normalize_semantic_text(" R-Right… don’t! "), "r right don't")
 
@@ -278,7 +363,7 @@ class SourceAudioSemanticsTest(unittest.TestCase):
         self.assertEqual(outcomes[1]["source_audio_completeness"], "full")
         self.assertEqual(
             outcomes[1]["source_audio_completeness_reason"],
-            "exact-normalized-asr-transcript",
+            "matched-normalized-asr-transcript",
         )
         self.assertEqual(outcomes[2]["source_audio_completeness"], "partial")
         self.assertEqual(
@@ -612,6 +697,23 @@ class SourceAudioSemanticsTest(unittest.TestCase):
             self.assertEqual(warm.metadata["source_audio_semantics"]["cache_hits"], 1)
             self.assertEqual(warm.metadata["source_audio_semantics"]["asr_calls"], 0)
             transcriber.assert_called_once()
+            old_policy = json.loads(cache_path.read_text(encoding="utf-8"))
+            self.assertEqual(old_policy["identity"].pop("comparison"), SOURCE_AUDIO_COMPARISON)
+            self.assertEqual(old_policy["identity"]["method"], BOUNDED_SEMANTIC_EVIDENCE_METHOD)
+            old_policy["identity"]["method"] = SEMANTIC_EVIDENCE_METHOD
+            old_policy.pop("checksum")
+            old_policy["checksum"] = _canonical_sha256(old_policy)
+            old_policy_path = cache_path.with_name(
+                f"{_canonical_sha256(old_policy['identity'])}.json"
+            )
+            old_policy_path.write_text(json.dumps(old_policy), encoding="utf-8")
+            cache_path.unlink()
+            transcriber.reset_mock()
+            reclassified = publish("reclassified")
+            self.assertEqual(reclassified.metadata["source_audio_semantics"]["cache_hits"], 0)
+            self.assertEqual(reclassified.metadata["source_audio_semantics"]["asr_calls"], 1)
+            transcriber.assert_called_once_with(b"wav")
+            self.assertEqual(json.loads(old_policy_path.read_text(encoding="utf-8")), old_policy)
             authority = load_source_audio_semantic_evidence(root / "warm-evidence.json")
             self.assertEqual(authority["model"]["preprocessing"], SEMANTIC_EVIDENCE_PREPROCESSING)
             authority["model"].pop("preprocessing")
@@ -733,6 +835,24 @@ class SourceAudioSemanticsTest(unittest.TestCase):
 
             sixth = publish("sixth", ("7", "8"), changed_records=changed_media, device="cuda")
             self.assertEqual(sixth.metadata["source_audio_semantics"]["asr_calls"], 2)
+
+
+def _rehash_evidence(authority):
+    for entry in authority["entries"]:
+        entry["entry_id"] = _canonical_sha256(
+            {
+                key: value
+                for key, value in entry.items()
+                if key not in {"entry_id", "source_line_ids"}
+            }
+        )
+    authority["evidence_id"] = _canonical_sha256(
+        {
+            key: value
+            for key, value in authority.items()
+            if key not in {"evidence_id", "generated_at"}
+        }
+    )
 
 
 def _record(sequence, text, media_id, payload):
