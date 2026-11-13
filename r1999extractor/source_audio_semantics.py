@@ -24,6 +24,7 @@ from vntts_artifacts.story_index import (
 
 from r1999extractor.reverse1999_index import bank_index_staleness_reasons
 from r1999extractor.source_audio_duration import _audio_resolution
+from r1999extractor.source_audio_evidence import copy_bound_source_audio_semantic_evidence
 from r1999extractor.source_audio_matching import (
     BOUNDED_SEMANTIC_EVIDENCE_METHOD,
     SOURCE_AUDIO_COMPARISON,
@@ -31,6 +32,7 @@ from r1999extractor.source_audio_matching import (
     normalize_semantic_text,
 )
 from r1999extractor.source_audio_policy import (
+    SOURCE_AUDIO_COMPLETENESS_POLICY,
     apply_main_story_source_audio_policy,
     has_full_main_story_source_audio,
 )
@@ -181,11 +183,10 @@ def publish_source_audio_semantic_evidence(
         raise SourceAudioSemanticEvidenceError(
             "Semantic evidence must publish new files, not mutate its story input"
         )
-    for destination in (evidence_destination, story_destination):
-        if destination.exists():
-            raise SourceAudioSemanticEvidenceError(
-                f"Semantic evidence destination already exists: {destination}"
-            )
+    if story_destination.exists():
+        raise SourceAudioSemanticEvidenceError(
+            f"Semantic evidence destination already exists: {story_destination}"
+        )
 
     source_sha256 = sha256_file(source)
     document = load_story_index_document(source)
@@ -211,10 +212,15 @@ def publish_source_audio_semantic_evidence(
                     "Source story index changed during classification"
                 )
             report_source_audio_progress(progress, "semantics", 0, 0, "publishing")
-            story_destination.parent.mkdir(parents=True, exist_ok=True)
-            return write_story_index_document(story_destination, metadata, records)
+            return _publish_main_story_policy_successor(
+                source, story_destination, metadata, records
+            )
         raise SourceAudioSemanticEvidenceError(
             "No unknown timed source-audio cues match the requested chapters"
+        )
+    if evidence_destination.exists():
+        raise SourceAudioSemanticEvidenceError(
+            f"Semantic evidence destination already exists: {evidence_destination}"
         )
 
     model_path = Path(model_directory).expanduser().resolve()
@@ -561,8 +567,7 @@ def annotate_story_index_source_audio_semantics(
     if any(has_full_main_story_source_audio(record) for record in selected_records) and not any(
         _is_unknown_timed_source_cue(record) for record in selected_records
     ):
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        return write_story_index_document(destination, metadata, records)
+        return _publish_main_story_policy_successor(source, destination, metadata, records)
     authority = load_source_audio_semantic_evidence(evidence)
     return _annotate_validated_story_index_source_audio_semantics(
         document,
@@ -573,6 +578,15 @@ def annotate_story_index_source_audio_semantics(
         cache_hits=cache_hits,
         asr_calls=asr_calls,
     )
+
+
+def _publish_main_story_policy_successor(source, destination, metadata, records):
+    copy_bound_source_audio_semantic_evidence(metadata, source, destination)
+    binding = metadata.get("source_audio_semantics")
+    if isinstance(binding, dict):
+        metadata["source_audio_semantics"] = {**binding, "cache_hits": 0, "asr_calls": 0}
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return write_story_index_document(destination, metadata, records)
 
 
 def _annotate_validated_story_index_source_audio_semantics(
@@ -788,8 +802,17 @@ def main(arguments=None):
         print(error, file=sys.stderr)
         return 1
     semantics = result.metadata.get("source_audio_semantics")
-    if semantics is None:
-        count = sum(has_full_main_story_source_audio(line.to_record()) for line in result.records)
+    if semantics is None or (
+        result.metadata.get("source_audio_completeness_policy") == SOURCE_AUDIO_COMPLETENESS_POLICY
+        and semantics.get("asr_calls") == 0
+        and semantics.get("cache_hits") == 0
+    ):
+        chapters = set(options.chapter)
+        count = sum(
+            has_full_main_story_source_audio(line.to_record())
+            for line in result.records
+            if not chapters or line.chapter in chapters
+        )
         print(f"Classified {count} main-story source voices without ASR; wrote {result.path}")
         return 0
     print(

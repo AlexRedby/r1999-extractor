@@ -3,6 +3,7 @@ import io
 import json
 import unittest
 import wave
+from contextlib import redirect_stdout
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,6 +12,10 @@ from unittest.mock import Mock, patch
 import numpy as np
 from vntts_artifacts.story_index import load_story_index_document, write_story_index_document
 
+from r1999extractor.source_audio_duration import (
+    SourceAudioTiming,
+    annotate_story_index_source_audio_durations,
+)
 from r1999extractor.source_audio_matching import (
     BOUNDED_SEMANTIC_EVIDENCE_METHOD,
     SOURCE_AUDIO_COMPARISON,
@@ -32,6 +37,10 @@ from r1999extractor.source_audio_semantics import (
     semantic_text_sha256,
     validate_source_audio_semantic_evidence,
 )
+from r1999extractor.source_audio_semantics import (
+    main as semantic_main,
+)
+from r1999extractor.story_audio import StoryAudioResolutionError
 
 
 class WhisperTranscriberTest(unittest.TestCase):
@@ -98,6 +107,156 @@ def _wav_bytes(pcm, rate, channels=1, sample_width=2):
 
 
 class SourceAudioSemanticsTest(unittest.TestCase):
+    def test_policy_successors_retain_bound_character_evidence_in_new_directories(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw.jsonl"
+            old_evidence = root / "source-audio-semantic-evidence.json"
+            main = _record(1, "Doctor!", 11, b"voice")
+            character = _record(2, "Stop it!", 22, b"voice")
+            character["chapter"] = "8"
+            write_story_index_document(raw, {"language": "en"}, [main, character])
+            resolver = Mock()
+            resolver.read_single_available_media.side_effect = [(11, b"voice"), (22, b"voice")]
+            with patch("r1999extractor.source_audio_semantics._decode_wem", return_value=b"wav"):
+                old = publish_source_audio_semantic_evidence(
+                    raw,
+                    "unused",
+                    old_evidence,
+                    root / "legacy.jsonl",
+                    "unused",
+                    model_sha256="a" * 64,
+                    resolver=resolver,
+                    transcriber=lambda _wav: "Stop it!",
+                )
+            records = [line.to_record() for line in old.records]
+            records[0]["collection_kind"] = "main_story"
+            records[1]["collection_kind"] = "character_story"
+            old = write_story_index_document(old.path, old.metadata, records)
+            retained = old.records[1].to_record()
+            evidence_payload = old_evidence.read_bytes()
+
+            class Probe:
+                @staticmethod
+                def probe(_resolution):
+                    return SourceAudioTiming(
+                        0.1, 11, hashlib.sha256(b"voice").hexdigest(), 24000, 2400, "r-test"
+                    )
+
+            def publish(mode, destination):
+                if mode == "timing":
+                    return annotate_story_index_source_audio_durations(
+                        old.path,
+                        "missing-bank",
+                        destination,
+                        chapters=("7",),
+                        probe=Probe(),
+                    )
+                if mode == "annotation":
+                    return annotate_story_index_source_audio_semantics(
+                        old.path,
+                        "unused-evidence",
+                        destination,
+                        chapters=("7",),
+                    )
+                return publish_source_audio_semantic_evidence(
+                    old.path,
+                    "missing-bank",
+                    destination.with_name("source-audio-semantic-evidence.json"),
+                    destination,
+                    "missing-model",
+                    chapters=("7",),
+                )
+
+            with (
+                patch("r1999extractor.source_audio_semantics.WhisperTranscriber") as transcriber,
+                patch("r1999extractor.source_audio_semantics.sha256_control_path") as model_hash,
+                patch("r1999extractor.source_audio_semantics._load_resolver") as load_resolver,
+            ):
+                for mode in ("publisher", "annotation", "timing"):
+                    with self.subTest(mode=mode):
+                        destination = root / mode / "story-index.jsonl"
+                        successor = publish(mode, destination)
+                        copied = destination.with_name("source-audio-semantic-evidence.json")
+                        self.assertEqual(copied.read_bytes(), evidence_payload)
+                        authority = load_source_audio_semantic_evidence(copied)
+                        self.assertEqual(
+                            authority["evidence_id"],
+                            successor.metadata["source_audio_semantics"]["evidence_id"],
+                        )
+                        self.assertEqual(
+                            hashlib.sha256(copied.read_bytes()).hexdigest(),
+                            successor.metadata["source_audio_semantics"]["evidence_sha256"],
+                        )
+                        self.assertEqual(
+                            successor.metadata["source_audio_semantics"]["applied_count"], 1
+                        )
+                        if mode != "timing":
+                            self.assertEqual(
+                                successor.metadata["source_audio_semantics"]["asr_calls"], 0
+                            )
+                            self.assertEqual(
+                                successor.metadata["source_audio_semantics"]["cache_hits"], 0
+                            )
+                        self.assertEqual(successor.records[1].to_record(), retained)
+                        self.assertNotIn(
+                            "source_audio_semantic_evidence_id", successor.records[0].to_record()
+                        )
+                        self.assertEqual(
+                            successor.records[0].to_record()["source_audio_completeness_reason"],
+                            MAIN_STORY_SOURCE_AUDIO_REASON,
+                        )
+                        existing = copied.read_bytes()
+                        second = publish(mode, destination.with_name("another-story.jsonl"))
+                        self.assertEqual(copied.read_bytes(), existing)
+                        self.assertEqual(
+                            second.metadata["source_audio_semantics"]["applied_count"], 1
+                        )
+
+                        conflict = root / f"{mode}-conflict" / "story-index.jsonl"
+                        conflict.parent.mkdir()
+                        conflict.with_name(copied.name).write_bytes(b"other evidence")
+                        with self.assertRaisesRegex(StoryAudioResolutionError, "different"):
+                            publish(mode, conflict)
+                        self.assertFalse(conflict.exists())
+                        self.assertEqual(
+                            conflict.with_name(copied.name).read_bytes(), b"other evidence"
+                        )
+
+                        old_evidence.write_bytes(evidence_payload + b" ")
+                        changed = root / f"{mode}-changed" / "story-index.jsonl"
+                        with self.assertRaisesRegex(StoryAudioResolutionError, "binding changed"):
+                            publish(mode, changed)
+                        self.assertFalse(changed.exists())
+                        old_evidence.write_bytes(evidence_payload)
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    self.assertEqual(
+                        semantic_main(
+                            [
+                                "--story-index",
+                                str(old.path),
+                                "--bank-index",
+                                "missing-bank",
+                                "--model",
+                                "missing-model",
+                                "--evidence-output",
+                                str(root / "cli" / "source-audio-semantic-evidence.json"),
+                                "--story-output",
+                                str(root / "cli" / "story-index.jsonl"),
+                                "--chapter",
+                                "7",
+                            ]
+                        ),
+                        0,
+                    )
+                self.assertIn(
+                    "Classified 1 main-story source voices without ASR", stdout.getvalue()
+                )
+                transcriber.assert_not_called()
+                model_hash.assert_not_called()
+                load_resolver.assert_not_called()
+
     def test_main_only_successor_replaces_old_partial_without_model_bank_or_asr(self):
         record = _record(
             1, "The displayed translation differs from the recorded language.", 11, b"voice"

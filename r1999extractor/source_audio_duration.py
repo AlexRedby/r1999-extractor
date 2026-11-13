@@ -20,6 +20,7 @@ from vntts_artifacts.story_index import (
 )
 
 from r1999extractor.reverse1999_index import bank_index_staleness_reasons
+from r1999extractor.source_audio_evidence import copy_bound_source_audio_semantic_evidence
 from r1999extractor.source_audio_policy import apply_main_story_source_audio_policy
 from r1999extractor.source_audio_progress import (
     SourceAudioProgressCallback,
@@ -290,7 +291,9 @@ def annotate_story_index_source_audio_durations(
         report_source_audio_progress(progress, "duration", eligible, total)
 
     metadata = dict(document.metadata)
-    apply_main_story_source_audio_policy(metadata, records)
+    policy_changed = apply_main_story_source_audio_policy(metadata, records)
+    if policy_changed or metadata.get("source_audio_completeness_policy") is not None:
+        copy_bound_source_audio_semantic_evidence(metadata, source, destination)
     metadata["source_audio_completion"] = "verified-media-duration-seconds"
     metadata["source_audio_timing"] = {
         "method": "exact-wem-decoder-sample-count",
