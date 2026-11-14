@@ -36,7 +36,7 @@ from r1999extractor.reverse1999_voice_import import (
 from r1999extractor.settings import get_local_data_directory
 from r1999extractor.source_audio_progress import (
     SourceAudioProgressCallback,
-    SourceAudioProgressFile,
+    SourceAudioProgressStream,
 )
 from r1999extractor.story_audio import StoryAudioResolver, build_audio_registry
 from r1999extractor.story_index import (
@@ -603,7 +603,7 @@ def create_parser():
         choices=REFERENCE_ADMISSION_POLICIES,
         default="transcript-bound",
     )
-    parser.add_argument("--progress-file", type=Path)
+    parser.add_argument("--progress-stdout", action="store_true")
     return parser
 
 
@@ -617,19 +617,6 @@ def main(arguments=None):
         )
         try:
             if options.prepare_voice_candidates_only:
-                if options.progress_file is not None:
-                    progress_path = options.progress_file.expanduser().resolve()
-                    artifact_root = (
-                        Path(options.data_directory or get_local_data_directory())
-                        .expanduser()
-                        .resolve()
-                        / "reverse1999"
-                    )
-                    if progress_path.is_relative_to(artifact_root) or (
-                        options.target_story_index is not None
-                        and progress_path == options.target_story_index.expanduser().resolve()
-                    ):
-                        raise BootstrapError("Progress file must differ from candidate artifacts")
                 manifest = prepare_player_voice_candidates(
                     roles=options.voice_candidate_role,
                     data_directory=options.data_directory,
@@ -638,9 +625,7 @@ def main(arguments=None):
                     narrator_line_id=options.narrator_line_id,
                     reference_admission_policy=options.reference_admission_policy,
                     **(
-                        {"progress": SourceAudioProgressFile(options.progress_file)}
-                        if options.progress_file is not None
-                        else {}
+                        {"progress": SourceAudioProgressStream()} if options.progress_stdout else {}
                     ),
                 )
                 print(json.dumps({"voice_manifest": str(manifest)}, sort_keys=True))

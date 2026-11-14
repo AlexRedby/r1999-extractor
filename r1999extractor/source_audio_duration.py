@@ -24,7 +24,7 @@ from r1999extractor.source_audio_evidence import copy_bound_source_audio_semanti
 from r1999extractor.source_audio_policy import apply_main_story_source_audio_policy
 from r1999extractor.source_audio_progress import (
     SourceAudioProgressCallback,
-    SourceAudioProgressFile,
+    SourceAudioProgressStream,
     report_source_audio_progress,
 )
 from r1999extractor.story_audio import (
@@ -347,18 +347,12 @@ def create_parser():
     parser.add_argument("--chapter", action="append", default=[])
     parser.add_argument("--decoder", default="vgmstream-cli")
     parser.add_argument("--cache-dir", type=Path)
-    parser.add_argument("--progress-file", type=Path)
+    parser.add_argument("--progress-stdout", action="store_true")
     return parser
 
 
 def main(arguments=None):
     options = create_parser().parse_args(arguments)
-    if options.progress_file is not None and options.progress_file.expanduser().resolve() in {
-        path.expanduser().resolve()
-        for path in (options.story_index, options.bank_index, options.output)
-    }:
-        print("Progress file must differ from source-audio inputs and outputs", file=sys.stderr)
-        return 1
     try:
         result = annotate_story_index_source_audio_durations(
             options.story_index,
@@ -367,11 +361,7 @@ def main(arguments=None):
             chapters=options.chapter,
             decoder=options.decoder,
             cache_dir=options.cache_dir,
-            progress=(
-                SourceAudioProgressFile(options.progress_file)
-                if options.progress_file is not None
-                else None
-            ),
+            progress=(SourceAudioProgressStream() if options.progress_stdout else None),
         )
     except (OSError, StoryAudioResolutionError, StoryIndexError) as error:
         print(error, file=sys.stderr)

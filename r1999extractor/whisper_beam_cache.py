@@ -6,7 +6,6 @@ import torch
 from transformers import WhisperForConditionalGeneration
 from transformers.cache_utils import DynamicCache, DynamicLayer, EncoderDecoderCache
 from transformers.generation.logits_process import SuppressTokensLogitsProcessor
-from transformers.pytorch_utils import isin_mps_friendly
 
 
 class _CpuSuppressTokensLogitsProcessor(SuppressTokensLogitsProcessor):
@@ -36,7 +35,7 @@ class _CpuSuppressTokensLogitsProcessor(SuppressTokensLogitsProcessor):
             or snapshot[0] != scores.shape[-1]
             or not torch.equal(snapshot[1], tokens)
         ):
-            mask = isin_mps_friendly(torch.arange(scores.shape[-1], device=scores.device), tokens)
+            mask = torch.isin(torch.arange(scores.shape[-1], device=scores.device), tokens)
             snapshot = (scores.shape[-1], tokens.clone(), mask)
             self._mask_snapshot = snapshot
         return torch.where(snapshot[2], -float("inf"), scores)

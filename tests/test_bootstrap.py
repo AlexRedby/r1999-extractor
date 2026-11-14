@@ -19,7 +19,7 @@ from r1999extractor.bootstrap import (
 )
 from r1999extractor.reverse1999_index import index_version
 from r1999extractor.source_audio_progress import (
-    SourceAudioProgressFile,
+    SourceAudioProgressStream,
     report_source_audio_progress,
 )
 from r1999extractor.story_audio import wwise_event_id
@@ -624,9 +624,9 @@ class BootstrapTest(unittest.TestCase):
             "r1999extractor.bootstrap.bootstrap_local_artifacts", return_value=result
         ) as build:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                self.assertEqual(main(["--progress-file", "unused-progress.json"]), 0)
+                self.assertEqual(main(["--progress-stdout"]), 0)
             self.assertTrue(callable(build.call_args.kwargs["progress"]))
-            self.assertNotIsInstance(build.call_args.kwargs["progress"], SourceAudioProgressFile)
+            self.assertNotIsInstance(build.call_args.kwargs["progress"], SourceAudioProgressStream)
 
     def test_cli_forwards_selected_target_story_index(self):
         target = Path("selected-story-index.jsonl")
@@ -653,38 +653,34 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(prepare.call_args.kwargs["reference_admission_policy"], "audio-only")
         self.assertNotIn("progress", prepare.call_args.kwargs)
 
-    def test_candidate_cli_progress_keeps_final_stdout_and_protects_artifacts(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            target = root / "external-story.jsonl"
-            arguments = [
-                "--prepare-voice-candidates-only",
-                "--voice-candidate-role",
-                "Hero",
-                "--data-directory",
-                str(root),
-                "--target-story-index",
-                str(target),
-            ]
-            with patch(
-                "r1999extractor.bootstrap.prepare_player_voice_candidates",
-                return_value=Path("manifest.json"),
-            ) as prepare:
-                stdout = io.StringIO()
-                with redirect_stdout(stdout):
-                    self.assertEqual(
-                        main(arguments + ["--progress-file", str(root / "progress.json")]), 0
-                    )
-                self.assertEqual(json.loads(stdout.getvalue()), {"voice_manifest": "manifest.json"})
-                self.assertIsInstance(prepare.call_args.kwargs["progress"], SourceAudioProgressFile)
-                for protected in (
-                    target,
-                    root / "reverse1999" / "voice-candidates" / "report.json",
-                ):
-                    prepare.reset_mock()
-                    with redirect_stderr(io.StringIO()):
-                        self.assertEqual(main(arguments + ["--progress-file", str(protected)]), 1)
-                    prepare.assert_not_called()
+    def test_candidate_cli_streams_progress_before_final_stdout_summary(self):
+        def prepare_with_progress(**kwargs):
+            report_source_audio_progress(kwargs["progress"], "references", 0, 2)
+            report_source_audio_progress(kwargs["progress"], "references", 2, 2)
+            return Path("manifest.json")
+
+        with patch(
+            "r1999extractor.bootstrap.prepare_player_voice_candidates",
+            side_effect=prepare_with_progress,
+        ) as prepare:
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(
+                    main(
+                        [
+                            "--prepare-voice-candidates-only",
+                            "--voice-candidate-role",
+                            "Hero",
+                            "--progress-stdout",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertIsInstance(prepare.call_args.kwargs["progress"], SourceAudioProgressStream)
+            lines = [line for line in stdout.getvalue().splitlines() if line]
+            events = [json.loads(line.removeprefix("R1999_PROGRESS ")) for line in lines[:-1]]
+            self.assertEqual([event["processed"] for event in events], [0, 2])
+            self.assertEqual(json.loads(lines[-1]), {"voice_manifest": "manifest.json"})
 
     def test_prepares_and_reuses_player_voice_candidate_manifest(self):
         with TemporaryDirectory() as directory:
