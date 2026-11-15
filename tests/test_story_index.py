@@ -283,6 +283,74 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(resolved.story_audio_cues[0].audio_status, "configured_unavailable")
         self.assertEqual(resolved.story_audio_cues[0].source_event, "play_door")
         self.assertEqual(resolved.story_audio_cues[0].source_bank, "story_sfx.bnk")
+        self.assertEqual(resolved.story_audio_cues[0].audio_kind, "other_audio")
+
+    def test_classifies_cue_resources_without_promoting_them_to_original_speech(self):
+        cases = (
+            (
+                "plotvoc_npc512101chapter6_part05.bnk",
+                "play_plotvoc_chap6_npc512101_11129",
+                "voice_candidate",
+            ),
+            (
+                "activityvoc_hero3072.bnk",
+                "play_activityvoc_hero3072_846",
+                "voice_candidate",  # A breath is still only a voice candidate.
+            ),
+            ("plotvoc_npc516701chapter7_sfx.bnk", "play_plotvoc_sound_1", "other_audio"),
+            ("plotvoc_npc1.bnk", "play_plotvoc_npc1_sfx_1", "other_audio"),
+            ("prologuechapter_3.bnk", "play_chap3_newspaper_turn", "other_audio"),
+            (
+                "prologuechapter_0_part03.bnk",
+                "play_prologuechapter_0_magiccharm01",
+                "other_audio",
+            ),
+            (None, None, "unknown"),
+        )
+        line = replace(
+            parse_story_document(
+                [
+                    "title",
+                    "",
+                    [
+                        [
+                            59, "step", payload("", "What really scared me..."),
+                            None, None, [story_audio_cue(610018168)],
+                        ]
+                    ],
+                ],
+                "json_story_step_100631",
+            )[0],
+            collection_kind="main_story",
+        )
+        for bank, event, expected in cases:
+            with self.subTest(bank=bank, event=event):
+                class Resolver:
+                    @staticmethod
+                    def resolve(audio_id):
+                        if audio_id is None:
+                            return AudioResolution("no_audio", "blank_voice_id")
+                        return AudioResolution(
+                            "installed" if bank else "unresolved",
+                            "resolved_local_media" if bank else "audio_id_not_in_config",
+                            audio_id=audio_id,
+                            bank=bank,
+                            event=event,
+                            media_ids=(927465334,) if bank else (),
+                            available_media_ids=(927465334,) if bank else (),
+                        )
+
+                resolved = resolve_story_audio([line], Resolver())[0]
+                self.assertEqual(resolved.story_audio_cues[0].audio_kind, expected)
+                self.assertEqual(resolved.audio_status, "no_audio")
+                self.assertIsNone(resolved.source_voice_id)
+                self.assertEqual(resolved.source_audio_completeness, "unknown")
+                self.assertEqual(resolved.speaker, "Narrator")
+                with TemporaryDirectory() as temporary_directory:
+                    output = write_story_index([resolved], Path(temporary_directory) / "index.jsonl")
+                    record = json.loads(output.read_text().splitlines()[1])
+                self.assertEqual(record["story_audio_cues"][0]["audio_kind"], expected)
+                self.assertEqual(record["source_audio_status"], "absent")
 
     def test_binds_exact_source_audio_timing_to_selected_chapter(self):
         line = parse_story_document(

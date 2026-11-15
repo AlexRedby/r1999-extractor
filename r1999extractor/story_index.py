@@ -89,6 +89,7 @@ class StoryAudioCue:
     source_bank: str | None = None
     source_media_ids: tuple[int, ...] = ()
     available_media_ids: tuple[int, ...] = ()
+    audio_kind: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -838,6 +839,21 @@ def add_story_context(lines, *, successors=None):
     ]
 
 
+def _story_audio_cue_kind(resolution):
+    if not resolution.bank or not resolution.event:
+        return "unknown"
+    bank = Path(resolution.bank).stem.casefold()
+    event = resolution.event.casefold()
+    if any(re.search(r"(?:^|_)sfx(?:_|$)", value) for value in (bank, event)):
+        return "other_audio"
+    if bank.startswith(("plotvoc_", "activityvoc_")) and event.startswith(
+        ("play_plotvoc_", "play_activityvoc_")
+    ):
+        # Resource family only: voices can also be breaths, laughs or other sounds.
+        return "voice_candidate"
+    return "other_audio"
+
+
 def resolve_story_audio(lines, resolver, *, duration_probe=None, duration_chapters=()):
     duration_chapters = {str(chapter).strip() for chapter in duration_chapters}
     resolved = []
@@ -876,6 +892,7 @@ def resolve_story_audio(lines, resolver, *, duration_probe=None, duration_chapte
                     source_bank=cue_resolution.bank,
                     source_media_ids=cue_resolution.media_ids,
                     available_media_ids=cue_resolution.available_media_ids,
+                    audio_kind=_story_audio_cue_kind(cue_resolution),
                 )
             )
         resolved.append(

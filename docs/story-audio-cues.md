@@ -13,7 +13,27 @@ Each cue record contains:
   guessed semantics;
 - `audio_status`, `audio_reason`, `source_audio_status`, `source_event`,
   `source_bank`, `source_media_ids`, and `available_media_ids` from the same
-  Wwise registry and installed-bank index used for source voices.
+  Wwise registry and installed-bank index used for source voices;
+- `audio_kind`, a resource-family classification independent of availability.
+
+## Resource classification
+
+`audio_kind` describes naming conventions, not the contents or completeness of
+the displayed line's speech:
+
+- `voice_candidate`: the bank starts with `plotvoc_` or `activityvoc_` and the
+  event starts with `play_plotvoc_` or `play_activityvoc_`. An explicit `sfx`
+  token in either name excludes the route. Matching is case-insensitive.
+- `other_audio`: the route has bank/event names outside those voice families,
+  or explicitly names an `sfx` resource. This includes effects and music, but
+  does not prove an unfamiliar resource contains no speech.
+- `unknown`: the bank or event name is missing, including unresolved routes
+  and extraction with audio resolution disabled.
+
+A voice candidate may be a breath, laugh, bark, loop, or dialogue. The field
+does not authorize suppressing narration, declaring full text coverage, or
+replacing the primary `source_audio_id`. No ASR or playback-policy change is
+performed by classification.
 
 The English patch 3.7 bundle contains 64,779 cue records. Every observed cue is
 a seven-field list with integer fields at positions 0, 1, 3 and 6, numeric
