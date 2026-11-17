@@ -21,7 +21,10 @@ from vntts_artifacts.story_index import (
 
 from r1999extractor.reverse1999_index import bank_index_staleness_reasons
 from r1999extractor.source_audio_evidence import copy_bound_source_audio_semantic_evidence
-from r1999extractor.source_audio_policy import apply_main_story_source_audio_policy
+from r1999extractor.source_audio_policy import (
+    apply_main_story_source_audio_policy,
+    main_story_plotvoc_cues,
+)
 from r1999extractor.source_audio_progress import (
     SourceAudioProgressCallback,
     SourceAudioProgressStream,
@@ -213,6 +216,26 @@ def _cache_checksum(record):
     ).hexdigest()
 
 
+def probe_source_audio_timing(record, probe):
+    """Keep exact media timing separate from the end of scheduled story cues."""
+    resolution = _audio_resolution(record)
+    timing = probe.probe(resolution) if resolution is not None else None
+    if timing is None or record.get("source_audio_cue_index") is None:
+        return timing, None
+    ends = []
+    for cue in main_story_plotvoc_cues(record):
+        if cue.get("cue_index") == record["source_audio_cue_index"]:
+            cue_timing = timing
+        else:
+            cue_resolution = _audio_resolution(cue)
+            cue_timing = probe.probe(cue_resolution) if cue_resolution is not None else None
+        if cue_timing is None:
+            return None, None
+        ends.append(cue.get("localized_parameter_2", 0.0) + cue_timing.duration_seconds)
+    wait = max(ends, default=timing.duration_seconds)
+    return timing, round(wait, 6) if wait > timing.duration_seconds else None
+
+
 def annotate_story_index_source_audio_durations(
     story_index,
     bank_index,
@@ -233,10 +256,13 @@ def annotate_story_index_source_audio_durations(
         )
     document = load_story_index_document(source)
     selected_chapters = {str(chapter).strip() for chapter in chapters if str(chapter).strip()}
+    records = [line.to_record() for line in document.records]
+    metadata = dict(document.metadata)
+    policy_changed = apply_main_story_source_audio_policy(metadata, records)
     total = sum(
-        line.source_audio_status == "available"
-        and (not selected_chapters or line.chapter in selected_chapters)
-        for line in document.records
+        record.get("source_audio_status") == "available"
+        and (not selected_chapters or record["chapter"] in selected_chapters)
+        for record in records
     )
     report_source_audio_progress(progress, "duration", 0, total)
     if probe is None:
@@ -256,25 +282,26 @@ def annotate_story_index_source_audio_durations(
             cache_dir=cache_dir,
         )
 
-    records = []
     eligible = 0
     measured = 0
-    for line in document.records:
-        record = line.to_record()
+    for record in records:
         if (
-            line.source_audio_status != "available"
+            record.get("source_audio_status") != "available"
             or selected_chapters
-            and line.chapter not in selected_chapters
+            and record["chapter"] not in selected_chapters
         ):
-            records.append(record)
             continue
         eligible += 1
-        resolution = _audio_resolution(record)
-        timing = probe.probe(resolution) if resolution is not None else None
+        timing, wait = probe_source_audio_timing(record, probe)
+        if record.get("source_audio_cue_index") is not None:
+            record.pop("source_audio_wait_seconds", None)
+            for key in tuple(record):
+                if key.startswith("source_audio_duration_"):
+                    record.pop(key)
         if timing is not None:
             measured += 1
             completeness, completeness_reason = classify_source_audio_completeness(
-                line.text,
+                record["text"],
                 timing,
             )
             record.update(
@@ -287,11 +314,12 @@ def annotate_story_index_source_audio_durations(
                 source_audio_completeness=completeness,
                 source_audio_completeness_reason=completeness_reason,
             )
-        records.append(record)
+            record.pop("source_audio_wait_seconds", None)
+            if wait is not None:
+                record["source_audio_wait_seconds"] = wait
         report_source_audio_progress(progress, "duration", eligible, total)
 
-    metadata = dict(document.metadata)
-    policy_changed = apply_main_story_source_audio_policy(metadata, records)
+    policy_changed = apply_main_story_source_audio_policy(metadata, records) or policy_changed
     if policy_changed or metadata.get("source_audio_completeness_policy") is not None:
         copy_bound_source_audio_semantic_evidence(metadata, source, destination)
     metadata["source_audio_completion"] = "verified-media-duration-seconds"
@@ -327,7 +355,7 @@ def _audio_resolution(record):
 
 
 def _media_ids(value):
-    if not isinstance(value, list) or any(
+    if not isinstance(value, (list, tuple)) or any(
         isinstance(item, bool) or not isinstance(item, int) for item in value
     ):
         return None

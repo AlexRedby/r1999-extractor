@@ -32,10 +32,13 @@ from r1999extractor.settings import get_local_data_directory
 from r1999extractor.source_audio_duration import (
     SourceAudioDurationProbe,
     classify_source_audio_completeness,
+    probe_source_audio_timing,
 )
 from r1999extractor.source_audio_policy import (
     MAIN_STORY_SOURCE_AUDIO_REASON,
     apply_main_story_source_audio_policy,
+    classify_story_audio_cue,
+    effective_main_story_source_audio,
     has_full_main_story_source_audio,
 )
 from r1999extractor.story_audio import (
@@ -124,6 +127,8 @@ class StoryLine:
     source_audio_duration_sample_rate: int | None = None
     source_audio_duration_sample_count: int | None = None
     source_audio_duration_decoder: str | None = None
+    source_audio_cue_index: int | None = None
+    source_audio_wait_seconds: float | None = None
     source_audio_completeness: str = "unknown"
     source_audio_completeness_reason: str | None = None
     story_audio_cues: tuple[StoryAudioCue, ...] = ()
@@ -839,31 +844,66 @@ def add_story_context(lines, *, successors=None):
     ]
 
 
-def _story_audio_cue_kind(resolution):
-    if not resolution.bank or not resolution.event:
-        return "unknown"
-    bank = Path(resolution.bank).stem.casefold()
-    event = resolution.event.casefold()
-    if any(re.search(r"(?:^|_)sfx(?:_|$)", value) for value in (bank, event)):
-        return "other_audio"
-    if bank.startswith(("plotvoc_", "activityvoc_")) and event.startswith(
-        ("play_plotvoc_", "play_activityvoc_")
-    ):
-        # Resource family only: voices can also be breaths, laughs or other sounds.
-        return "voice_candidate"
-    return "other_audio"
-
-
 def resolve_story_audio(lines, resolver, *, duration_probe=None, duration_chapters=()):
     duration_chapters = {str(chapter).strip() for chapter in duration_chapters}
     resolved = []
     for line in lines:
         resolution = resolver.resolve(line.source_voice_spec)
-        timing = (
-            duration_probe.probe(resolution)
+        story_audio_cues = []
+        cue_resolutions = []
+        for cue in line.story_audio_cues:
+            cue_resolution = resolver.resolve(cue.source_audio_id)
+            cue_resolutions.append(cue_resolution)
+            story_audio_cues.append(
+                replace(
+                    cue,
+                    source_audio_id=cue_resolution.audio_id or cue.source_audio_id,
+                    audio_status=cue_resolution.status,
+                    audio_reason=cue_resolution.reason,
+                    source_event=cue_resolution.event,
+                    source_bank=cue_resolution.bank,
+                    source_media_ids=cue_resolution.media_ids,
+                    available_media_ids=cue_resolution.available_media_ids,
+                    audio_kind=classify_story_audio_cue(
+                        {
+                            "source_bank": cue_resolution.bank,
+                            "source_event": cue_resolution.event,
+                        }
+                    ),
+                )
+            )
+        primary = {
+            "collection_kind": line.collection_kind,
+            "source_audio_status": source_audio_status_by_extractor_status.get(resolution.status),
+            "story_audio_cues": [
+                {
+                    **asdict(cue),
+                    "source_audio_status": source_audio_status_by_extractor_status.get(
+                        cue.audio_status
+                    ),
+                }
+                for cue in story_audio_cues
+            ],
+        }
+        effective = effective_main_story_source_audio(primary)
+        source_audio_cue_index = None
+        if effective is not None and effective is not primary:
+            resolution = cue_resolutions[primary["story_audio_cues"].index(effective)]
+            source_audio_cue_index = effective["cue_index"]
+        primary.update(
+            source_audio_status=source_audio_status_by_extractor_status.get(resolution.status),
+            source_audio_id=resolution.audio_id,
+            source_bank=resolution.bank,
+            source_event=resolution.event,
+            source_media_ids=resolution.media_ids,
+            available_media_ids=resolution.available_media_ids,
+            source_audio_cue_index=source_audio_cue_index,
+        )
+        timing, wait = (
+            probe_source_audio_timing(primary, duration_probe)
             if duration_probe is not None
             and (not duration_chapters or line.chapter in duration_chapters)
-            else None
+            else (None, None)
         )
         completeness, completeness_reason = (
             classify_source_audio_completeness(line.text, timing)
@@ -879,22 +919,6 @@ def resolve_story_audio(lines, resolver, *, duration_probe=None, duration_chapte
             }
         ):
             completeness, completeness_reason = "full", MAIN_STORY_SOURCE_AUDIO_REASON
-        story_audio_cues = []
-        for cue in line.story_audio_cues:
-            cue_resolution = resolver.resolve(cue.source_audio_id)
-            story_audio_cues.append(
-                replace(
-                    cue,
-                    source_audio_id=cue_resolution.audio_id or cue.source_audio_id,
-                    audio_status=cue_resolution.status,
-                    audio_reason=cue_resolution.reason,
-                    source_event=cue_resolution.event,
-                    source_bank=cue_resolution.bank,
-                    source_media_ids=cue_resolution.media_ids,
-                    available_media_ids=cue_resolution.available_media_ids,
-                    audio_kind=_story_audio_cue_kind(cue_resolution),
-                )
-            )
         resolved.append(
             replace(
                 line,
@@ -921,6 +945,8 @@ def resolve_story_audio(lines, resolver, *, duration_probe=None, duration_chapte
                 source_audio_duration_decoder=(
                     timing.decoder_version if timing is not None else None
                 ),
+                source_audio_cue_index=source_audio_cue_index,
+                source_audio_wait_seconds=wait,
                 source_audio_completeness=completeness,
                 source_audio_completeness_reason=completeness_reason,
                 story_audio_cues=tuple(story_audio_cues),
@@ -1010,6 +1036,9 @@ def write_story_index(lines, output=default_output, *, bundle=None):
     records = []
     for line in lines:
         record = asdict(line)
+        for key in ("source_audio_cue_index", "source_audio_wait_seconds"):
+            if record[key] is None:
+                record.pop(key)
         record["source_audio_status"] = source_audio_status_by_extractor_status.get(
             line.audio_status,
             "unknown",

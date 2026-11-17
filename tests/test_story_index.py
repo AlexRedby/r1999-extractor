@@ -285,7 +285,7 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(resolved.story_audio_cues[0].source_bank, "story_sfx.bnk")
         self.assertEqual(resolved.story_audio_cues[0].audio_kind, "other_audio")
 
-    def test_classifies_cue_resources_without_promoting_them_to_original_speech(self):
+    def test_promotes_main_story_plotvoc_and_keeps_other_cue_resources_separate(self):
         cases = (
             (
                 "plotvoc_npc512101chapter6_part05.bnk",
@@ -314,8 +314,12 @@ class StoryIndexTest(unittest.TestCase):
                     "",
                     [
                         [
-                            59, "step", payload("", "What really scared me..."),
-                            None, None, [story_audio_cue(610018168)],
+                            59,
+                            "step",
+                            payload("", "What really scared me..."),
+                            None,
+                            None,
+                            [story_audio_cue(610018168)],
                         ]
                     ],
                 ],
@@ -325,6 +329,7 @@ class StoryIndexTest(unittest.TestCase):
         )
         for bank, event, expected in cases:
             with self.subTest(bank=bank, event=event):
+
                 class Resolver:
                     @staticmethod
                     def resolve(audio_id):
@@ -342,15 +347,94 @@ class StoryIndexTest(unittest.TestCase):
 
                 resolved = resolve_story_audio([line], Resolver())[0]
                 self.assertEqual(resolved.story_audio_cues[0].audio_kind, expected)
-                self.assertEqual(resolved.audio_status, "no_audio")
-                self.assertIsNone(resolved.source_voice_id)
-                self.assertEqual(resolved.source_audio_completeness, "unknown")
+                promoted = expected == "voice_candidate" and bank.startswith("plotvoc_")
+                self.assertEqual(resolved.audio_status, "installed" if promoted else "no_audio")
+                self.assertEqual(resolved.source_voice_id, "610018168" if promoted else None)
+                self.assertEqual(
+                    resolved.source_audio_completeness, "full" if promoted else "unknown"
+                )
                 self.assertEqual(resolved.speaker, "Narrator")
                 with TemporaryDirectory() as temporary_directory:
-                    output = write_story_index([resolved], Path(temporary_directory) / "index.jsonl")
+                    output = write_story_index(
+                        [resolved], Path(temporary_directory) / "index.jsonl"
+                    )
                     record = json.loads(output.read_text().splitlines()[1])
                 self.assertEqual(record["story_audio_cues"][0]["audio_kind"], expected)
-                self.assertEqual(record["source_audio_status"], "absent")
+                self.assertEqual(
+                    record["source_audio_status"], "available" if promoted else "absent"
+                )
+
+    def test_times_effective_plotvoc_but_preserves_available_primary(self):
+        line = replace(
+            parse_story_document(
+                [
+                    "title",
+                    "",
+                    [
+                        [
+                            59,
+                            "step",
+                            payload("Vertin", "Original speech.", voice="700"),
+                            None,
+                            None,
+                            [story_audio_cue(610018168)],
+                        ]
+                    ],
+                ],
+                "json_story_step_100631",
+            )[0],
+            collection_kind="main_story",
+        )
+        for primary_installed in (True, False):
+            with self.subTest(primary_installed=primary_installed):
+                measured = []
+
+                class Resolver:
+                    @staticmethod
+                    def resolve(audio_id):
+                        return AudioResolution(
+                            "installed"
+                            if audio_id != "700" or primary_installed
+                            else "configured_unavailable",
+                            "resolved_local_media",
+                            audio_id=audio_id,
+                            bank="voice.bnk"
+                            if audio_id == "700"
+                            else "plotvoc_npc512101chapter6_part05.bnk",
+                            event="play_voice"
+                            if audio_id == "700"
+                            else "play_plotvoc_chap6_npc512101_11129",
+                            media_ids=(70,) if audio_id == "700" else (927465334,),
+                            available_media_ids=(70,) if audio_id == "700" else (927465334,),
+                        )
+
+                class Probe:
+                    @staticmethod
+                    def probe(resolution):
+                        measured.append(resolution.audio_id)
+                        return SourceAudioTiming(
+                            2, resolution.media_ids[0], "a" * 64, 24000, 48000, "r-test"
+                        )
+
+                resolved = resolve_story_audio([line], Resolver(), duration_probe=Probe())[0]
+                self.assertEqual(measured, ["700" if primary_installed else "610018168"])
+                self.assertEqual(resolved.source_voice_spec, "700")
+                self.assertEqual(resolved.source_audio_duration_seconds, 2)
+                self.assertEqual(resolved.source_audio_duration_sample_count, 48000)
+                self.assertEqual(resolved.source_audio_completeness, "full")
+                self.assertEqual(resolved.source_audio_cue_index, None if primary_installed else 1)
+                self.assertEqual(
+                    resolved.source_audio_wait_seconds, None if primary_installed else 2.3
+                )
+                with TemporaryDirectory() as directory:
+                    output = write_story_index([resolved], Path(directory) / "index.jsonl")
+                    record = json.loads(output.read_text().splitlines()[1])
+                if primary_installed:
+                    self.assertNotIn("source_audio_wait_seconds", record)
+                    self.assertNotIn("source_audio_cue_index", record)
+                else:
+                    self.assertEqual(record["source_audio_wait_seconds"], 2.3)
+                    self.assertEqual(record["source_audio_duration_seconds"], 2)
 
     def test_binds_exact_source_audio_timing_to_selected_chapter(self):
         line = parse_story_document(

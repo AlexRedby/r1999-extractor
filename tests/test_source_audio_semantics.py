@@ -314,7 +314,21 @@ class SourceAudioSemanticsTest(unittest.TestCase):
 
     def test_mixed_publication_keeps_asr_for_character_stories_only(self):
         main = _record(1, "An English subtitle for a different recorded language.", 11, b"main")
-        main["collection_kind"] = "main_story"
+        main.update(
+            collection_kind="main_story",
+            source_audio_status="absent",
+            story_audio_cues=[
+                {
+                    "cue_index": 1,
+                    "source_audio_id": "610018168",
+                    "source_audio_status": "available",
+                    "source_bank": "plotvoc_npc512101chapter6_part05.bnk",
+                    "source_event": "play_plotvoc_chap6_npc512101_11129",
+                    "source_media_ids": [927465334],
+                    "available_media_ids": [927465334],
+                }
+            ],
+        )
         character = _record(2, "Doctor!", 22, b"character")
         character["collection_kind"] = "character_story"
         with TemporaryDirectory() as directory:
