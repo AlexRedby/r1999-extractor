@@ -23,7 +23,7 @@ from r1999extractor.reverse1999_index import bank_index_staleness_reasons
 from r1999extractor.source_audio_evidence import copy_bound_source_audio_semantic_evidence
 from r1999extractor.source_audio_policy import (
     apply_main_story_source_audio_policy,
-    main_story_plotvoc_cues,
+    plotvoc_cues,
 )
 from r1999extractor.source_audio_progress import (
     SourceAudioProgressCallback,
@@ -223,7 +223,7 @@ def probe_source_audio_timing(record, probe):
     if timing is None or record.get("source_audio_cue_index") is None:
         return timing, None
     ends = []
-    for cue in main_story_plotvoc_cues(record):
+    for cue in plotvoc_cues(record):
         if cue.get("cue_index") == record["source_audio_cue_index"]:
             cue_timing = timing
         else:

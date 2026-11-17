@@ -6,6 +6,7 @@ from r1999extractor.source_audio_policy import (
     SOURCE_AUDIO_COMPLETENESS_POLICY,
     apply_main_story_source_audio_policy,
     effective_main_story_source_audio,
+    effective_source_audio,
     has_full_main_story_source_audio,
 )
 
@@ -86,7 +87,7 @@ class SourceAudioPolicyTest(unittest.TestCase):
         record["source_audio_status"] = "absent"
         self.assertIs(effective_main_story_source_audio(record), cues[0])
 
-    def test_unavailable_sfx_activity_and_non_main_plotvoc_do_not_override_asr(self):
+    def test_non_main_plotvoc_needs_comparison_and_unavailable_sfx_activity_stay_unchanged(self):
         cue = {
             "cue_index": 1,
             "source_audio_id": "610018168",
@@ -115,12 +116,27 @@ class SourceAudioPolicyTest(unittest.TestCase):
                     "source_audio_status": "absent",
                     "source_audio_completeness": "partial",
                     "source_audio_completeness_reason": "asr-transcript-mismatch",
+                    "source_audio_semantic_evidence_id": "old-evidence",
+                    "source_audio_semantic_evidence_entry_id": "old-entry",
                     "story_audio_cues": [{**cue, **changes}],
                 }
                 before = deepcopy(record)
                 self.assertIsNone(effective_main_story_source_audio(record))
-                self.assertFalse(apply_main_story_source_audio_policy({}, [record]))
-                self.assertEqual(record, before)
+                metadata = {"source_audio_semantics": {"applied_count": 1}}
+                if kind != "main_story" and not changes:
+                    self.assertIs(effective_source_audio(record), record["story_audio_cues"][0])
+                    self.assertTrue(apply_main_story_source_audio_policy(metadata, [record]))
+                    self.assertEqual(record["source_audio_status"], "available")
+                    self.assertEqual(record["source_audio_completeness"], "unknown")
+                    self.assertIsNone(record["source_audio_completeness_reason"])
+                    self.assertNotIn("source_audio_semantic_evidence_entry_id", record)
+                    self.assertNotIn("source_audio_semantics", metadata)
+                    self.assertFalse(has_full_main_story_source_audio(record))
+                    self.assertFalse(apply_main_story_source_audio_policy(metadata, [record]))
+                else:
+                    self.assertIsNone(effective_source_audio(record))
+                    self.assertFalse(apply_main_story_source_audio_policy(metadata, [record]))
+                    self.assertEqual(record, before)
 
     def test_only_available_main_story_audio_is_full_by_policy(self):
         for kind in ("main_story", "anecdote", "character_story", None):

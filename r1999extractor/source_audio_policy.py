@@ -23,10 +23,8 @@ def classify_story_audio_cue(record: Mapping[str, object]) -> str:
     return "other_audio"
 
 
-def main_story_plotvoc_cues(record: Mapping[str, object]) -> list[Mapping]:
-    """Installed main-story PlotVoc cues in the game's declared order."""
-    if record.get("collection_kind") != "main_story":
-        return []
+def plotvoc_cues(record: Mapping[str, object]) -> list[Mapping]:
+    """Installed PlotVoc cues in the game's declared order."""
     cues = []
     for cue in record.get("story_audio_cues", ()):
         if (
@@ -38,13 +36,17 @@ def main_story_plotvoc_cues(record: Mapping[str, object]) -> list[Mapping]:
     return cues
 
 
-def effective_main_story_source_audio(record: Mapping[str, object]) -> Mapping | None:
+def effective_source_audio(record: Mapping[str, object]) -> Mapping | None:
     """Return the primary original, otherwise the first installed PlotVoc cue in game order."""
-    if record.get("collection_kind") != "main_story":
-        return None
     if record.get("source_audio_status") == "available":
         return record
-    return next(iter(main_story_plotvoc_cues(record)), None)
+    return next(iter(plotvoc_cues(record)), None)
+
+
+def effective_main_story_source_audio(record: Mapping[str, object]) -> Mapping | None:
+    if record.get("collection_kind") != "main_story":
+        return None
+    return effective_source_audio(record)
 
 
 def has_full_main_story_source_audio(record: Mapping[str, object]) -> bool:
@@ -53,11 +55,11 @@ def has_full_main_story_source_audio(record: Mapping[str, object]) -> bool:
 
 
 def apply_main_story_source_audio_policy(metadata: dict, records: list[dict]) -> bool:
-    """Replace superseded ASR verdicts in memory and retain other evidence bindings."""
+    """Expose fallback originals; only main-story originals bypass ASR comparison."""
     changed = False
     eligible = False
     for record in records:
-        source = effective_main_story_source_audio(record)
+        source = effective_source_audio(record)
         if source is None:
             continue
         if source is not record:
@@ -70,6 +72,8 @@ def apply_main_story_source_audio_policy(metadata: dict, records: list[dict]) ->
                 source_audio_id=source["source_audio_id"],
                 source_voice_id=source["source_audio_id"],
                 source_audio_cue_index=source["cue_index"],
+                source_audio_completeness="unknown",
+                source_audio_completeness_reason=None,
                 audio_status="installed",
                 audio_reason=source.get("audio_reason", "resolved_local_media"),
                 **{
@@ -83,14 +87,18 @@ def apply_main_story_source_audio_policy(metadata: dict, records: list[dict]) ->
                 },
             )
             changed = True
+        main_story = record.get("collection_kind") == "main_story"
+        if not main_story and source is record:
+            continue
         eligible = True
-        for key, value in (
-            ("source_audio_completeness", "full"),
-            ("source_audio_completeness_reason", MAIN_STORY_SOURCE_AUDIO_REASON),
-        ):
-            if record.get(key) != value:
-                record[key] = value
-                changed = True
+        if main_story:
+            for key, value in (
+                ("source_audio_completeness", "full"),
+                ("source_audio_completeness_reason", MAIN_STORY_SOURCE_AUDIO_REASON),
+            ):
+                if record.get(key) != value:
+                    record[key] = value
+                    changed = True
         for key in (
             "source_audio_semantic_evidence_id",
             "source_audio_semantic_evidence_entry_id",

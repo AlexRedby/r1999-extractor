@@ -385,8 +385,13 @@ class StoryIndexTest(unittest.TestCase):
             )[0],
             collection_kind="main_story",
         )
-        for primary_installed in (True, False):
-            with self.subTest(primary_installed=primary_installed):
+        for kind, primary_installed in (
+            ("main_story", True),
+            ("main_story", False),
+            ("character_story", True),
+            ("character_story", False),
+        ):
+            with self.subTest(kind=kind, primary_installed=primary_installed):
                 measured = []
 
                 class Resolver:
@@ -416,12 +421,17 @@ class StoryIndexTest(unittest.TestCase):
                             2, resolution.media_ids[0], "a" * 64, 24000, 48000, "r-test"
                         )
 
-                resolved = resolve_story_audio([line], Resolver(), duration_probe=Probe())[0]
+                resolved = resolve_story_audio(
+                    [replace(line, collection_kind=kind)], Resolver(), duration_probe=Probe()
+                )[0]
                 self.assertEqual(measured, ["700" if primary_installed else "610018168"])
                 self.assertEqual(resolved.source_voice_spec, "700")
                 self.assertEqual(resolved.source_audio_duration_seconds, 2)
                 self.assertEqual(resolved.source_audio_duration_sample_count, 48000)
-                self.assertEqual(resolved.source_audio_completeness, "full")
+                self.assertEqual(
+                    resolved.source_audio_completeness,
+                    "full" if kind == "main_story" else "unknown",
+                )
                 self.assertEqual(resolved.source_audio_cue_index, None if primary_installed else 1)
                 self.assertEqual(
                     resolved.source_audio_wait_seconds, None if primary_installed else 2.3

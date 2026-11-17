@@ -23,6 +23,7 @@ from r1999extractor.source_audio_matching import (
 from r1999extractor.source_audio_policy import (
     MAIN_STORY_SOURCE_AUDIO_REASON,
     SOURCE_AUDIO_COMPLETENESS_POLICY,
+    apply_main_story_source_audio_policy,
 )
 from r1999extractor.source_audio_semantics import (
     SEMANTIC_EVIDENCE_METHOD,
@@ -311,6 +312,66 @@ class SourceAudioSemanticsTest(unittest.TestCase):
         self.assertNotIn("source_audio_semantics", result.metadata)
         self.assertNotIn("source_audio_semantic_evidence_entry_id", main)
         self.assertEqual(events[-1]["state"], "publishing")
+
+    def test_side_plotvoc_is_timed_then_compared_with_asr(self):
+        payload = b"character"
+        record = _record(17, "Doctor!", 36413432, payload)
+        cue = {
+            key: record[key]
+            for key in ("source_audio_id", "source_media_ids", "available_media_ids")
+        }
+        cue.update(
+            cue_index=1,
+            source_audio_status="available",
+            source_bank="plotvoc_npc510701chapter7.bnk",
+            source_event="play_plotvoc_chap7_npc510701_11538",
+        )
+        record.update(
+            collection_kind="character_story",
+            source_audio_status="absent",
+            story_audio_cues=[cue],
+        )
+
+        class Probe:
+            @staticmethod
+            def probe(_resolution):
+                return SourceAudioTiming(
+                    1.0, 36413432, hashlib.sha256(payload).hexdigest(), 24000, 24000, "r-test"
+                )
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw.jsonl"
+            write_story_index_document(raw, {"language": "en"}, [record])
+            timed = annotate_story_index_source_audio_durations(
+                raw, "unused", root / "timed.jsonl", probe=Probe()
+            )
+            candidate = timed.records[0].to_record()
+            self.assertEqual(candidate["source_audio_status"], "available")
+            self.assertEqual(candidate["source_audio_completeness"], "unknown")
+            resolver = Mock()
+            resolver.read_single_available_media.return_value = (36413432, payload)
+            transcriber = Mock(return_value="Stop it!")
+            with patch("r1999extractor.source_audio_semantics._decode_wem", return_value=b"wav"):
+                compared = publish_source_audio_semantic_evidence(
+                    timed.path,
+                    "unused",
+                    root / "evidence.json",
+                    root / "compared.jsonl",
+                    "unused",
+                    model_sha256="a" * 64,
+                    resolver=resolver,
+                    transcriber=transcriber,
+                )
+        transcriber.assert_called_once()
+        resolver.read_single_available_media.assert_called_once()
+        result = compared.records[0].to_record()
+        self.assertEqual(result["source_audio_status"], "available")
+        self.assertEqual(result["source_audio_completeness"], "partial")
+        self.assertEqual(result["source_audio_completeness_reason"], "asr-transcript-mismatch")
+        self.assertEqual(result["source_audio_cue_index"], 1)
+        self.assertIn("source_audio_semantic_evidence_entry_id", result)
+        self.assertFalse(apply_main_story_source_audio_policy(dict(compared.metadata), [result]))
 
     def test_mixed_publication_keeps_asr_for_character_stories_only(self):
         main = _record(1, "An English subtitle for a different recorded language.", 11, b"main")

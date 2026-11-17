@@ -38,7 +38,7 @@ from r1999extractor.source_audio_policy import (
     MAIN_STORY_SOURCE_AUDIO_REASON,
     apply_main_story_source_audio_policy,
     classify_story_audio_cue,
-    effective_main_story_source_audio,
+    effective_source_audio,
     has_full_main_story_source_audio,
 )
 from r1999extractor.story_audio import (
@@ -885,7 +885,7 @@ def resolve_story_audio(lines, resolver, *, duration_probe=None, duration_chapte
                 for cue in story_audio_cues
             ],
         }
-        effective = effective_main_story_source_audio(primary)
+        effective = effective_source_audio(primary)
         source_audio_cue_index = None
         if effective is not None and effective is not primary:
             resolution = cue_resolutions[primary["story_audio_cues"].index(effective)]
