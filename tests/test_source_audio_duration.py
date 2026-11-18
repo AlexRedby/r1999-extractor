@@ -1,16 +1,18 @@
 import hashlib
 import json
+import sys
 import unittest
 from pathlib import Path
 from subprocess import CompletedProcess
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from vntts_artifacts.story_index import write_story_index_document
 
 from r1999extractor.source_audio_duration import (
     SourceAudioDurationProbe,
     SourceAudioTiming,
+    _cache_checksum,
     annotate_story_index_source_audio_durations,
     classify_source_audio_completeness,
     probe_source_audio_timing,
@@ -255,7 +257,7 @@ class SourceAudioDurationTest(unittest.TestCase):
                 stderr="",
             )
 
-        probe = SourceAudioDurationProbe(Resolver(), decoder="/usr/bin/true", runner=runner)
+        probe = SourceAudioDurationProbe(Resolver(), decoder=sys.executable, runner=runner)
         resolution = AudioResolution(
             "installed",
             "resolved_local_media",
@@ -282,7 +284,8 @@ class SourceAudioDurationTest(unittest.TestCase):
             def read_single_available_media(_resolution):
                 return None
 
-        probe = SourceAudioDurationProbe(Resolver(), decoder="/usr/bin/true")
+        runner = Mock()
+        probe = SourceAudioDurationProbe(Resolver(), decoder=sys.executable, runner=runner)
 
         self.assertIsNone(
             probe.probe(
@@ -295,6 +298,42 @@ class SourceAudioDurationTest(unittest.TestCase):
                 )
             )
         )
+        runner.assert_not_called()
+
+    def test_handles_large_decoder_integers_by_ratio(self):
+        class Resolver:
+            @staticmethod
+            def read_single_available_media(_resolution):
+                return 99, b"exact-wem"
+
+        for sample_count, sample_rate, expected in (
+            (10**1000, 1, None),
+            (10**300, 1, None),
+            (10**1000, 10**999, 10.0),
+        ):
+            with self.subTest(sample_count=sample_count, sample_rate=sample_rate):
+
+                def runner(command, **_options):
+                    return CompletedProcess(
+                        command,
+                        0,
+                        stdout=json.dumps(
+                            {
+                                "version": "r-test",
+                                "sampleRate": sample_rate,
+                                "playSamples": sample_count,
+                            }
+                        ),
+                    )
+
+                probe = SourceAudioDurationProbe(Resolver(), decoder=sys.executable, runner=runner)
+                timing = probe.probe(None)
+                if expected is None:
+                    self.assertIsNone(timing)
+                else:
+                    self.assertEqual(timing.duration_seconds, expected)
+                    self.assertEqual(timing.sample_count, sample_count)
+                    self.assertEqual(timing.sample_rate, sample_rate)
 
     def test_shared_cache_reuses_only_exact_media_and_decoder(self):
         with TemporaryDirectory() as directory:
@@ -357,6 +396,28 @@ class SourceAudioDurationTest(unittest.TestCase):
             decoder.write_bytes(b"decoder-two")
             self.assertEqual(fresh_probe().probe(resolution).duration_seconds, 1.25)
             self.assertEqual(len(calls), 4)
+
+            cache_file = next(
+                path
+                for path in (root / "cache" / "duration").glob("*.json")
+                if json.loads(path.read_text())["decoder_sha256"]
+                == hashlib.sha256(b"decoder-two").hexdigest()
+            )
+            for sample_count, sample_rate, expected, cache_hits in (
+                (10**1000, 1, 1.25, 0),
+                (10**300, 1, 1.25, 0),
+                (10**1000, 10**999, 10.0, 1),
+            ):
+                with self.subTest(sample_count=sample_count, sample_rate=sample_rate):
+                    cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                    cached.pop("checksum")
+                    cached.update(sample_count=sample_count, sample_rate=sample_rate)
+                    cached["checksum"] = _cache_checksum(cached)
+                    cache_file.write_text(json.dumps(cached), encoding="utf-8")
+                    probe = fresh_probe()
+                    self.assertEqual(probe.probe(resolution).duration_seconds, expected)
+                    self.assertEqual(probe.cache_hits, cache_hits)
+                    self.assertEqual(probe.decoder_probes, 1 - cache_hits)
 
     def test_publishes_lossless_story_index_with_verified_timing_contract(self):
         class Probe:

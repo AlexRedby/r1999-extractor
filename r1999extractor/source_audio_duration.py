@@ -125,7 +125,7 @@ class SourceAudioDurationProbe:
                         self._cache[digest] = timing
                         self.cache_hits += 1
                         return timing
-            except (OSError, ValueError, TypeError, AttributeError):
+            except (OSError, ValueError, TypeError, AttributeError, OverflowError):
                 pass
         try:
             with TemporaryDirectory(prefix="r1999-source-duration-") as temporary_directory:
@@ -150,7 +150,14 @@ class SourceAudioDurationProbe:
             duration = sample_count / sample_rate
             if not math.isfinite(duration) or not 0 < duration <= 600:
                 return None
-        except (OSError, TypeError, ValueError, json.JSONDecodeError, AudioConversionError):
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            OverflowError,
+            json.JSONDecodeError,
+            AudioConversionError,
+        ):
             return None
         timing = SourceAudioTiming(
             round(duration, 6),
