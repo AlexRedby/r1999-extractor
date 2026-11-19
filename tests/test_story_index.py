@@ -5,8 +5,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from vntts_artifacts.hashing import text_sha256
 from vntts_artifacts.story_index import load_story_index
 
+from r1999extractor import STORY_TEXT_POLICY
 from r1999extractor.reverse1999_index import index_version
 from r1999extractor.source_audio_duration import SourceAudioTiming
 from r1999extractor.source_audio_policy import (
@@ -509,6 +511,7 @@ class StoryIndexTest(unittest.TestCase):
             records = [json.loads(row) for row in output.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(records[0]["schema"], "vntts.story-index")
         self.assertEqual(records[0]["schema_version"], 1)
+        self.assertEqual(records[0]["story_text_policy"], STORY_TEXT_POLICY)
         self.assertEqual(records[1]["record_type"], "line")
         self.assertEqual(len(records[1]["text_sha256"]), 64)
         self.assertEqual(records[1]["source_audio_status"], "available")
@@ -739,6 +742,35 @@ class StoryIndexTest(unittest.TestCase):
         self.assertEqual(annotated[2].episode_title, "The Eternal Autumn")
         self.assertEqual({line.story_group for line in annotated}, {"main:12"})
         self.assertEqual({line.collection_id for line in annotated}, {"reverse1999:main-story:12"})
+
+    def test_hero_story_links_use_localized_titles_before_filtering_and_hashing(self):
+        language = {
+            "station": "Abendmuse Radio",
+            "city": "Berlin",
+            "description": "A radio station.",
+            "dialogue": "[3020901]",
+            "aside": "[17]: [3020901] / [3020901], [1920], [18].",
+        }
+        tables = {
+            "json_hero_story_introduce": [
+                [3020901, "station", "", "description"],
+                [17, "city", "", ""],
+                [18, "missing", "", "description"],
+            ],
+            "json_hero_story_plot": [
+                [302001007, 302001, "dialog", "", "", "dialogue"],
+                [302001008, 302001, "aside", "", "", "aside"],
+            ],
+        }
+        first, second = extract_hero_story_plot_lines(language, tables)
+        self.assertEqual(first.line_id, "reverse1999:hero-story-plot:302001007")
+        self.assertEqual(second.line_id, "reverse1999:hero-story-plot:302001008")
+        self.assertEqual(first.text, "Abendmuse Radio")
+        self.assertEqual(second.text, "Berlin: Abendmuse Radio / Abendmuse Radio, [1920], [18].")
+        self.assertEqual(first.next_text, second.text)
+        self.assertEqual(second.previous_text, first.text)
+        for line in (first, second):
+            self.assertEqual(line.text_sha256, text_sha256(line.text))
 
     def test_extracts_config_only_hero_story_dialogue_and_narration(self):
         language = {

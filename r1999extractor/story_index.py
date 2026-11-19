@@ -12,6 +12,7 @@ from pathlib import Path
 from vntts_artifacts.hashing import text_sha256
 from vntts_artifacts.story_index import write_story_index as write_story_index_document
 
+from r1999extractor import STORY_TEXT_POLICY
 from r1999extractor.reverse1999_aliases import voice_character_for_speaker
 from r1999extractor.reverse1999_config import (
     Reverse1999ConfigError,
@@ -53,6 +54,7 @@ story_bundle_filename = f"{hashlib.md5(story_asset_name.encode()).hexdigest()}.d
 default_output = get_local_data_directory() / "reverse1999" / "story-index.jsonl"
 _MAX_STORY_DISCOVERY_LOG_PATHS = 20
 rich_text_pattern = re.compile(r"<[^>]*>")
+hero_story_link_pattern = re.compile(r"\[([0-9]+)\]")
 latin_pattern = re.compile(r"[A-Za-z]")
 cjk_pattern = re.compile(r"[\u3400-\u9fff]")
 ascii_word_pattern = re.compile(r"[A-Za-z]{2,}")
@@ -564,6 +566,13 @@ def annotate_activity220_story_lines(lines, language, tables):
 
 def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=False):
     """Extract spoken and narratable text from config-only interactive hero stories."""
+    link_titles = {}
+    for row in tables.get("json_hero_story_introduce", []):
+        if isinstance(row, list) and len(row) >= 2:
+            title = _language_text(language, row[1])
+            if title:
+                link_titles[str(row[0])] = title
+
     hero_stories = {}
     for position, row in enumerate(tables.get("json_hero_story", []), start=1):
         if not isinstance(row, list) or len(row) <= 9:
@@ -613,6 +622,9 @@ def extract_hero_story_plot_lines(language, tables, *, include_non_speakable=Fal
         text = _language_text(language, row[5])
         if not text:
             continue
+        text = hero_story_link_pattern.sub(
+            lambda match: link_titles.get(match[1], match[0]), text
+        )
         speakable, filter_reason = classify_speakable_english(text, str(group_id))
         if not speakable and not include_non_speakable:
             continue
@@ -1013,6 +1025,7 @@ def write_story_index(lines, output=default_output, *, bundle=None):
     metadata = {
         "game": "Reverse: 1999",
         "language": "en",
+        "story_text_policy": STORY_TEXT_POLICY,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_bundle": str(Path(bundle).resolve()) if bundle else None,
         "line_count": len(lines),
